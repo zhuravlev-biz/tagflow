@@ -1,0 +1,250 @@
+import { describe, expect, it, vi } from 'vitest'
+import {
+  classifyUserAgent,
+  createAffiliateHandler,
+  createAffiliateWorker,
+  type ExecutionContextLike,
+} from '../src/index.js'
+
+const CONFIG = {
+  defaultMarketplace: 'es',
+  tags: { es: 'tag-es-21', de: 'tag-de-21' },
+  products: {
+    widget: { asin: 'B000000001', availableIn: ['es', 'de'] },
+  },
+}
+
+const DESKTOP_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+
+interface RequestInit2 {
+  country?: string | undefined
+  userAgent?: string | undefined
+}
+
+function makeRequest(url: string, init: RequestInit2 = {}): Request {
+  const request = new Request(url, {
+    headers: init.userAgent === undefined ? {} : { 'user-agent': init.userAgent },
+  })
+  if (init.country !== undefined) {
+    Object.defineProperty(request, 'cf', { value: { country: init.country } })
+  }
+  return request as unknown as Request
+}
+
+function makeCtx(): ExecutionContextLike & { promises: Promise<unknown>[] } {
+  const promises: Promise<unknown>[] = []
+  return {
+    promises,
+    waitUntil(promise: Promise<unknown>) {
+      promises.push(promise)
+    },
+  }
+}
+
+describe('createAffiliateHandler', () => {
+  it('throws at startup on an invalid config', () => {
+    expect(() => createAffiliateHandler({ defaultMarketplace: 'nope' })).toThrow(
+      /invalid affiliate config/,
+    )
+  })
+
+  it('returns null for paths outside the prefix (mounted-mode contract, F7)', async () => {
+    const handler = createAffiliateHandler(CONFIG)
+    for (const path of ['/', '/about', '/gopher', '/going/widget']) {
+      const response = await handler(
+        makeRequest(`https://site.example${path}`, { userAgent: DESKTOP_UA }),
+        {},
+        makeCtx(),
+      )
+      expect(response, path).toBeNull()
+    }
+  })
+
+  it('returns null for unknown product keys so the host 404 handles them', async () => {
+    const handler = createAffiliateHandler(CONFIG)
+    const response = await handler(
+      makeRequest('https://site.example/go/no-such-thing', { userAgent: DESKTOP_UA }),
+      {},
+      makeCtx(),
+    )
+    expect(response).toBeNull()
+  })
+
+  it('302-redirects with F9 headers', async () => {
+    const handler = createAffiliateHandler(CONFIG)
+    const response = await handler(
+      makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
+      {},
+      makeCtx(),
+    )
+    expect(response).not.toBeNull()
+    expect(response?.status).toBe(302)
+    expect(response?.headers.get('location')).toBe(
+      'https://www.amazon.de/dp/B000000001?tag=tag-de-21',
+    )
+    expect(response?.headers.get('cache-control')).toBe('no-store')
+    expect(response?.headers.get('x-robots-tag')).toBe('noindex')
+  })
+
+  it('falls back to the default marketplace when request.cf is missing', async () => {
+    const handler = createAffiliateHandler(CONFIG)
+    const response = await handler(
+      makeRequest('https://site.example/go/widget', { userAgent: DESKTOP_UA }),
+      {},
+      makeCtx(),
+    )
+    expect(response?.headers.get('location')).toBe(
+      'https://www.amazon.es/dp/B000000001?tag=tag-es-21',
+    )
+  })
+
+  it('honours a custom prefix', async () => {
+    const handler = createAffiliateHandler(CONFIG, { prefix: '/out' })
+    const viaOut = await handler(
+      makeRequest('https://site.example/out/widget', { country: 'DE', userAgent: DESKTOP_UA }),
+      {},
+      makeCtx(),
+    )
+    expect(viaOut?.status).toBe(302)
+    const viaGo = await handler(
+      makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
+      {},
+      makeCtx(),
+    )
+    expect(viaGo).toBeNull()
+  })
+
+  it('logs one data point per click via waitUntil (F11)', async () => {
+    const handler = createAffiliateHandler(CONFIG)
+    const writeDataPoint = vi.fn()
+    const ctx = makeCtx()
+    const response = await handler(
+      makeRequest('https://site.example/go/widget', { country: 'FR', userAgent: DESKTOP_UA }),
+      { CLICKS: { writeDataPoint } },
+      ctx,
+    )
+    expect(response?.status).toBe(302)
+    expect(ctx.promises).toHaveLength(1)
+    await Promise.all(ctx.promises)
+    expect(writeDataPoint).toHaveBeenCalledExactlyOnceWith({
+      // FR maps to fr, which has no tag → fallback chain ends at default es.
+      blobs: ['FR', 'es', 'widget', 'fallback-no-tag', 'desktop'],
+      doubles: [1],
+      indexes: ['widget'],
+    })
+  })
+
+  it('honours a custom analytics binding name', async () => {
+    const handler = createAffiliateHandler(CONFIG, { analyticsBinding: 'AFFILIATE_CLICKS' })
+    const writeDataPoint = vi.fn()
+    const ctx = makeCtx()
+    await handler(
+      makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
+      { AFFILIATE_CLICKS: { writeDataPoint } },
+      ctx,
+    )
+    await Promise.all(ctx.promises)
+    expect(writeDataPoint).toHaveBeenCalledOnce()
+  })
+
+  it('skips logging silently when no analytics binding is configured', async () => {
+    const handler = createAffiliateHandler(CONFIG)
+    const ctx = makeCtx()
+    const response = await handler(
+      makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
+      {},
+      ctx,
+    )
+    expect(response?.status).toBe(302)
+    expect(ctx.promises).toHaveLength(0)
+  })
+
+  it('never fails the redirect on analytics errors', async () => {
+    const handler = createAffiliateHandler(CONFIG)
+    const ctx = makeCtx()
+    const response = await handler(
+      makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
+      {
+        CLICKS: {
+          writeDataPoint: () => {
+            throw new Error('AE quota exceeded')
+          },
+        },
+      },
+      ctx,
+    )
+    expect(response?.status).toBe(302)
+    await expect(Promise.all(ctx.promises)).resolves.toBeDefined()
+  })
+
+  it('redirects bots and logs uaClass=bot under the default policy', async () => {
+    const handler = createAffiliateHandler(CONFIG)
+    const writeDataPoint = vi.fn()
+    const ctx = makeCtx()
+    const response = await handler(
+      makeRequest('https://site.example/go/widget', {
+        country: 'DE',
+        userAgent: 'Googlebot/2.1 (+http://www.google.com/bot.html)',
+      }),
+      { CLICKS: { writeDataPoint } },
+      ctx,
+    )
+    expect(response?.status).toBe(302)
+    await Promise.all(ctx.promises)
+    expect(writeDataPoint.mock.calls[0]?.[0].blobs?.[4]).toBe('bot')
+  })
+
+  it('bots: "ignore" redirects but skips logging', async () => {
+    const handler = createAffiliateHandler(CONFIG, { bots: 'ignore' })
+    const writeDataPoint = vi.fn()
+    const ctx = makeCtx()
+    const response = await handler(
+      makeRequest('https://site.example/go/widget', {
+        country: 'DE',
+        userAgent: 'Googlebot/2.1 (+http://www.google.com/bot.html)',
+      }),
+      { CLICKS: { writeDataPoint } },
+      ctx,
+    )
+    expect(response?.status).toBe(302)
+    expect(ctx.promises).toHaveLength(0)
+    expect(writeDataPoint).not.toHaveBeenCalled()
+  })
+})
+
+describe('createAffiliateWorker', () => {
+  it('serves the redirect and a JSON 404 for everything else', async () => {
+    const worker = createAffiliateWorker(CONFIG)
+    const redirect = await worker.fetch(
+      makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
+      {},
+      makeCtx(),
+    )
+    expect(redirect.status).toBe(302)
+
+    const missing = await worker.fetch(
+      makeRequest('https://site.example/go/nope', { userAgent: DESKTOP_UA }),
+      {},
+      makeCtx(),
+    )
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).toEqual({ error: 'not found' })
+  })
+})
+
+describe('classifyUserAgent', () => {
+  it('classifies desktop, mobile and bots', () => {
+    expect(classifyUserAgent(DESKTOP_UA)).toBe('desktop')
+    expect(
+      classifyUserAgent(
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1',
+      ),
+    ).toBe('mobile')
+    expect(classifyUserAgent('Googlebot/2.1')).toBe('bot')
+    expect(classifyUserAgent('curl/8.6.0')).toBe('bot')
+    expect(classifyUserAgent('')).toBe('bot')
+    expect(classifyUserAgent(null)).toBe('bot')
+    expect(classifyUserAgent(undefined)).toBe('bot')
+  })
+})

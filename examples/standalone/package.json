@@ -1,0 +1,21 @@
+{
+  "name": "example-standalone",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Bare usage of the TagFlow standalone Worker template.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tagflow/cloudflare": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260711.1",
+    "typescript": "7.0.2",
+    "wrangler": "4.110.0"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "defaultMarketplace": "com",
+  "tags": {
+    "com": "yourtag-20"
+  },
+  "countryOverrides": {},
+  "marketplaceFallbacks": {},
+  "unknownAsin": "default",
+  "products": {
+    "example-product": {
+      "asin": "B0XXXXXXXX",
+      "availableIn": ["com"]
+    }
+  }
+}

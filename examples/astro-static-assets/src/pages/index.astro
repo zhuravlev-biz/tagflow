@@ -1,0 +1,33 @@
+---
+import { goUrl, goAmazonUrl } from '@tagflow/core'
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TagFlow × Astro static assets</title>
+  </head>
+  <body>
+    <main>
+      <h1>Review: Flagship Remote</h1>
+      <p>
+        Build-time helper (<code>goUrl</code>) generates the redirect path, so
+        templates never hand-write it — and adding marketplaces later never
+        touches published content.
+      </p>
+      <p>
+        <a href={goUrl('flagship-product')} rel="sponsored nofollow">
+          View on Amazon
+        </a>
+      </p>
+      <p>
+        One-off link without a product entry:
+        <a href={goAmazonUrl('B0XXXXXXXX')} rel="sponsored nofollow">
+          View on Amazon
+        </a>
+      </p>
+      <p><small>As an Amazon Associate we earn from qualifying purchases.</small></p>
+    </main>
+  </body>
+</html>

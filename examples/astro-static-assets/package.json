@@ -1,0 +1,25 @@
+{
+  "name": "example-astro-static-assets",
+  "private": true,
+  "version": "0.1.0",
+  "description": "TagFlow mounted inside the Worker that serves an Astro site's static assets — one Worker, one deploy, no extra zone.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro build && wrangler dev",
+    "deploy": "astro build && wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tagflow/cloudflare": "workspace:*",
+    "@tagflow/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260711.1",
+    "astro": "7.0.7",
+    "typescript": "7.0.2",
+    "wrangler": "4.110.0"
+  }
+}

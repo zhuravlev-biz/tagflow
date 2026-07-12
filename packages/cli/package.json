@@ -1,0 +1,41 @@
+{
+  "name": "@tagflow/cli",
+  "version": "0.1.0",
+  "description": "CLI for TagFlow: scaffold, validate and availability-check localized Amazon affiliate link configs.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "tagflow": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tagflow/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  },
+  "keywords": [
+    "amazon-associates",
+    "affiliate",
+    "cloudflare-workers",
+    "cli"
+  ]
+}

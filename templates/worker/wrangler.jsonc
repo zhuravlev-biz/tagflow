@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "affiliate-links",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+
+  // Click analytics via Workers Analytics Engine. This is included in the
+  // FREE plan (100k data points/day written, 10k read queries/day as of
+  // 2026-07) — no billing setup needed. Delete this block to disable
+  // logging entirely; redirects work either way.
+  "analytics_engine_datasets": [
+    {
+      "binding": "CLICKS",
+      "dataset": "affiliate_clicks"
+    }
+  ]
+
+  // To serve the redirects from your own domain (recommended for Amazon
+  // compliance — the click source stays identifiable), add a route, e.g.:
+  // "routes": [{ "pattern": "yoursite.com/go/*", "zone_name": "yoursite.com" }]
+}

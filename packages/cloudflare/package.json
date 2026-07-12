@@ -1,0 +1,40 @@
+{
+  "name": "@tagflow/cloudflare",
+  "version": "0.1.0",
+  "description": "Cloudflare Worker adapter for localized Amazon affiliate links: mountable handler, 302 semantics, optional Analytics Engine click logging.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tagflow/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260711.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  },
+  "keywords": [
+    "amazon-associates",
+    "affiliate",
+    "onelink-alternative",
+    "geniuslink-alternative",
+    "cloudflare-workers"
+  ]
+}

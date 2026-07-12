@@ -1,0 +1,11 @@
+packages:
+  - packages/*
+  - templates/*
+  - examples/*
+
+allowBuilds:
+  esbuild: true
+  sharp: true
+  workerd: true
+
+savePrefix: ''

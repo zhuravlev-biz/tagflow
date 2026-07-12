@@ -1,0 +1,33 @@
+# Weekly availability check for your affiliate config (§10 of the design
+# doc). Fails the run — and can notify you — when a previously-available
+# listing disappears, i.e. when clicks would start leaking to fallbacks.
+#
+# By default this uses the PA-API engine, which requires PAAPI_ACCESS_KEY and
+# PAAPI_SECRET_KEY repository secrets. The plain HTTPS probe engine is NOT
+# suitable here: it must run from your own machine and IP, never from CI or
+# datacenter infrastructure.
+name: check-listings
+
+on:
+  schedule:
+    - cron: '17 6 * * 1' # Mondays 06:17 UTC
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: npx tagflow validate
+      - run: npx tagflow check --engine paapi
+        env:
+          PAAPI_ACCESS_KEY: ${{ secrets.PAAPI_ACCESS_KEY }}
+          PAAPI_SECRET_KEY: ${{ secrets.PAAPI_SECRET_KEY }}

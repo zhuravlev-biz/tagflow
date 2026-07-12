@@ -1,0 +1,30 @@
+{
+  "defaultMarketplace": "es",
+  "tags": {
+    "es": "yourtag-21",
+    "de": "yourtag0d-21",
+    "com": "yourtag-20"
+  },
+  "countryOverrides": {
+    "CH": "de"
+  },
+  "marketplaceFallbacks": {
+    "fr": "es",
+    "it": "es",
+    "co.uk": "de"
+  },
+  "unknownAsin": "default",
+  "products": {
+    "flagship-product": {
+      "asin": "B0XXXXXXXX",
+      "asinByMarketplace": {
+        "de": "B0YYYYYYYY"
+      },
+      "availableIn": ["es", "de", "com"]
+    },
+    "travel-case": {
+      "asin": "B0ZZZZZZZZ",
+      "availableIn": ["es"]
+    }
+  }
+}

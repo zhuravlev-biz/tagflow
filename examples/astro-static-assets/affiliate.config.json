@@ -1,0 +1,19 @@
+{
+  "defaultMarketplace": "es",
+  "tags": {
+    "es": "yourtag-21",
+    "de": "yourtag0d-21",
+    "com": "yourtag-20"
+  },
+  "countryOverrides": {},
+  "marketplaceFallbacks": {
+    "fr": "es"
+  },
+  "unknownAsin": "default",
+  "products": {
+    "flagship-product": {
+      "asin": "B0XXXXXXXX",
+      "availableIn": ["es", "de", "com"]
+    }
+  }
+}
