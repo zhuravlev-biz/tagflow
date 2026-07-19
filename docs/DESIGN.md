@@ -708,26 +708,40 @@ This section is a differentiator — every DIY blog post hand-waves it.
   versions would only confuse users) and `access: "public"`.
   `.github/workflows/release.yml` runs `changesets/action@v1`: on push to
   `main` it either opens/updates a "Version Packages" PR or, once that PR is
-  merged, builds and publishes via `npm publish` (changesets shells out to
-  `npm`, not `pnpm`, for the actual registry call regardless of the
-  workspace's package manager — sidesteps a pnpm 11 OIDC-publish bug
-  ([pnpm/pnpm#11513](https://github.com/pnpm/pnpm/issues/11513), fixed but
-  recent enough to avoid depending on). Auth is npm's OIDC **trusted
-  publishing** (`permissions: id-token: write`, `npm install -g npm@latest`
+  merged, builds and publishes. Verified against the installed
+  `@changesets/cli` source (correcting an earlier note here): in a pnpm
+  workspace `changeset publish` detects pnpm via `getPublishTool` and runs
+  `pnpm publish --no-git-checks` per package, so `workspace:*` deps ARE
+  rewritten to real versions in the published tarballs (npm would leave
+  them broken). Auth is npm's OIDC **trusted publishing**
+  (`permissions: id-token: write`, `npm install -g npm@latest`
   to guarantee ≥11.5.1) rather than a stored `NPM_TOKEN` — no long-lived
   registry credential to rotate — plus `permissions: contents: write` /
   `pull-requests: write` for the version-bump PR itself. Each package now has
   `repository`/`homepage`/`bugs` pointing at
   `github.com/zhuravlev-biz/tagflow` and `publishConfig: { access: "public",
   provenance: true }` (scoped packages default to private without
-  `access: public`). **Not yet done — needs a one-time manual step outside
-  this repo before the first release can actually publish:** the GitHub repo
-  itself hasn't been created/pushed yet (no git remote configured locally),
-  and each of the three trusted-publisher entries must be configured on
-  npmjs.com (org/user + repo + workflow filename) after the repo exists —
-  npm's docs don't confirm whether trusted publishing covers a package's
-  very first publish or whether that one needs a manual `npm publish
-  --access public` first, so budget for either. Status (2026-07-19): a
+  `access: public`). Status (2026-07-19, post-push): the repo is live at
+  `github.com/zhuravlev-biz/tagflow` (public — required for provenance), CI
+  is green, and the release workflow runs end-to-end up to the registry
+  call, where it fails with E404 as expected: **npm trusted publishing
+  cannot create a brand-new package** — the package must already exist
+  before a trusted publisher can be configured for it
+  ([npm/cli#8544](https://github.com/npm/cli/issues/8544), confirmed live by
+  run 29692912859's "No NPM_TOKEN found, but OIDC is available" followed by
+  E404 on all three packages). **Remaining one-time steps, in order:**
+  (1) create the `tagflow` org on npmjs.com to claim the `@tagflow` scope
+  (org didn't exist as of 2026-07-19; whether the bare name is squatted by a
+  user account couldn't be probed anonymously); (2) `npm login` locally and
+  publish 0.2.0 of all three packages manually, with provenance forced off
+  since it only works from CI OIDC (`npm_config_provenance=false pnpm -r
+  --filter './packages/*' publish --access public --no-git-checks`), then
+  `pnpm changeset tag && git push --tags`; (3) on npmjs.com, for each of the
+  three packages: Settings → Trusted publisher → GitHub Actions, org
+  `zhuravlev-biz`, repo `tagflow`, workflow `release.yml`, no environment
+  (post-2026-05-20 configs must also explicitly tick the "publish" allowed
+  action). From then on the changesets PR → merge → publish loop is fully
+  automatic with provenance. Status (2026-07-19): a
   `template-copyout` job was added
   (`.github/workflows/ci.yml`) that reproduces the documented user flow
   end-to-end — pack `core`/`cloudflare`/`cli` to tarballs, copy
