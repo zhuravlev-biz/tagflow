@@ -21,7 +21,7 @@
     "typecheck": "pnpm -r run typecheck",
     "lint": "biome lint .",
     "changeset": "changeset",
-    "version-packages": "changeset version",
+    "version-packages": "changeset version && pnpm install --lockfile-only",
     "release": "pnpm build && changeset publish"
   },
   "devDependencies": {
