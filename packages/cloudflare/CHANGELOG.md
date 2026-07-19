@@ -1,5 +1,16 @@
 # @tagflow/cloudflare
 
+## 0.3.0
+
+### Minor Changes
+
+- 7d666d9: Raise the supported Node floor from ≥ 20 to ≥ 22 (`engines.node`) — Node 20 reached end-of-life in April 2026. CI now runs on Node 24 (current LTS). No code changes; if you're on Node 22+ already, nothing to do.
+
+### Patch Changes
+
+- Updated dependencies [7d666d9]
+  - @tagflow/core@0.3.0
+
 ## 0.2.1
 
 ### Patch Changes

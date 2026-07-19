@@ -1,6 +1,6 @@
 {
   "name": "@tagflow/cloudflare",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Cloudflare Worker adapter for localized Amazon affiliate links: mountable handler, 302 semantics, optional Analytics Engine click logging.",
   "license": "MIT",
   "author": "Alex Zhuravlev",
