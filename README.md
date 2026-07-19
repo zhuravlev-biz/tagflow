@@ -209,7 +209,7 @@ pnpm install
 pnpm build && pnpm test && pnpm typecheck
 ```
 
-Strict TypeScript, ESM-only, exact-pinned deps, Node ≥ 20, `core` at 100%
+Strict TypeScript, ESM-only, exact-pinned deps, Node ≥ 22, `core` at 100%
 branch coverage on `resolve()`.
 
 ## License

@@ -264,10 +264,11 @@ projects prove both demand and the distribution model.
   imports, no I/O, no `Date.now()`/randomness in `resolve()` (A/B randomness
   is injected). Fully unit-testable in plain vitest.
 - **N4 — Strict TypeScript, ESM-only, exact-pinned dependencies** (no `^`/`~`),
-  Node ≥ 20 for tooling, `wrangler` v4 for the template. ✅ Done — verified
-  across every `package.json` in the repo: exact versions throughout,
-  `"type": "module"` everywhere, `"engines": {"node": ">=20"}` set,
-  `wrangler: "4.110.0"`.
+  Node ≥ 22 for tooling (raised from ≥ 20 on 2026-07-19 — Node 20 hit EOL
+  2026-04; CI runs Node 24, the current LTS), `wrangler` v4 for the template.
+  ✅ Done — verified across every `package.json` in the repo: exact versions
+  throughout, `"type": "module"` everywhere, `"engines": {"node": ">=22"}`
+  set, `wrangler: "4.110.0"`.
 - **N5 — SEO safety.** ✅ Done — `x-robots-tag: noindex` in `handler.ts`;
   `rel="sponsored nofollow"` guidance and a `robots.txt` snippet in
   `docs/COMPLIANCE.md`, used live in the Astro example. Redirect paths carry `rel="sponsored nofollow"` guidance

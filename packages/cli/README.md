@@ -6,7 +6,7 @@ affiliate links.
 
 **Zero third-party dependencies** — the only dependency is
 [`@tagflow/core`](https://www.npmjs.com/package/@tagflow/core), which itself
-has none at all. Just Node ≥ 20.
+has none at all. Just Node ≥ 22.
 
 ## Commands
 
