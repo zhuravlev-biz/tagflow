@@ -13,12 +13,16 @@ export {
   parseConfig,
   RESERVED_PRODUCT_KEYS,
   type Config,
+  type MobileDeepLink,
   type ProductConfig,
   type ParseConfigResult,
+  type RetailerConfig,
   type ValidationIssue,
+  type VariantConfig,
 } from './config.js'
 export {
   resolve,
+  type ChoiceEntry,
   type ClickContext,
   type Decision,
   type ResolutionReason,

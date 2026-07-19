@@ -4,6 +4,7 @@ import {
   type Config,
   type Decision,
 } from '@tagflow/core'
+import { renderChoicePage } from './choice-page.js'
 import type {
   AnalyticsEngineDataset,
   ExecutionContextLike,
@@ -61,8 +62,17 @@ export function createAffiliateHandler(
     // idempotently, so passing the normalized value through is safe).
     const country = (request as IncomingRequest).cf?.country?.toUpperCase()
     const userAgent = request.headers.get('user-agent')
+    const uaClass = classifyUserAgent(userAgent)
     const decision = resolve(
-      { country, path: url.pathname.slice(prefix.length), userAgent: userAgent ?? undefined },
+      {
+        country,
+        path: url.pathname.slice(prefix.length),
+        userAgent: userAgent ?? undefined,
+        // Device class feeds deep-link routing (F16); the injected random
+        // drives stateless A/B assignment (F13) — core stays pure (N3).
+        device: uaClass,
+        random: Math.random(),
+      },
       parsed,
     )
     if (decision.type === 'not-found') return null
@@ -71,7 +81,6 @@ export function createAffiliateHandler(
     // fail the visitor (F11). Only GET is logged as a click — HEAD/OPTIONS/
     // POST etc. are prefetch or preflight noise, not visitor clicks, and
     // would otherwise inflate the analytics counts.
-    const uaClass = classifyUserAgent(userAgent)
     if (request.method === 'GET' && (bots !== 'ignore' || uaClass !== 'bot')) {
       const dataset = (env as Record<string, unknown> | null | undefined)?.[analyticsBinding]
       if (isAnalyticsDataset(dataset)) {
@@ -81,6 +90,19 @@ export function createAffiliateHandler(
           // Even a broken ExecutionContext must not break the redirect.
         }
       }
+    }
+
+    // Choice pages (F14) are 200 HTML, not redirects; same caching/SEO
+    // posture as the redirects (geo-dependent, must never be indexed).
+    if (decision.type === 'choice') {
+      return new Response(renderChoicePage(decision), {
+        status: 200,
+        headers: {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+          'x-robots-tag': 'noindex',
+        },
+      })
     }
 
     // 302, not 301: mappings and tags change. `no-store`: the response is
@@ -124,20 +146,27 @@ function isAnalyticsDataset(value: unknown): value is AnalyticsEngineDataset {
 
 function logClick(
   dataset: AnalyticsEngineDataset,
-  decision: Extract<Decision, { type: 'redirect' }>,
+  decision: Exclude<Decision, { type: 'not-found' }>,
   country: string | undefined,
   uaClass: UaClass,
 ): Promise<void> {
   return Promise.resolve().then(() => {
     try {
+      // blob2 carries the resolved marketplace for Amazon redirects, the
+      // `ext:<key>` destination for non-Amazon redirects (F15/F16), and is
+      // empty for choice-page views (no single destination, F14). blob4 is
+      // `choice` for page views, the resolution reason otherwise. blob6 is
+      // the A/B variant (F13) or empty.
+      const marketplace =
+        decision.type === 'redirect'
+          ? decision.marketplace
+          : decision.type === 'external'
+            ? `ext:${decision.destination}`
+            : ''
+      const reason = decision.type === 'choice' ? 'choice' : decision.resolutionReason
+      const variant = decision.type === 'redirect' ? (decision.variant ?? '') : ''
       dataset.writeDataPoint({
-        blobs: [
-          country ?? '',
-          decision.marketplace,
-          decision.productKey,
-          decision.resolutionReason,
-          uaClass,
-        ],
+        blobs: [country ?? '', marketplace, decision.productKey, reason, uaClass, variant],
         doubles: [1],
         indexes: [decision.productKey],
       })

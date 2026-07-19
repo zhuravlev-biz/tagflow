@@ -15,6 +15,7 @@ import {
   printIssues,
   writeConfigFile,
 } from '../config-io.js'
+import { printTable } from '../table.js'
 
 export interface CheckTarget {
   readonly productKey: string
@@ -29,11 +30,15 @@ export function checkTargets(config: Config): CheckTarget[] {
   const marketplaces = Object.keys(config.tags) as MarketplaceId[]
   const targets: CheckTarget[] = []
   for (const [productKey, product] of Object.entries(config.products)) {
+    // Products without an ASIN (non-Amazon destination, F15) have no Amazon
+    // listing to verify.
+    const baseAsin = product.asin
+    if (baseAsin === undefined) continue
     for (const marketplace of marketplaces) {
       targets.push({
         productKey,
         marketplace,
-        asin: product.asinByMarketplace?.[marketplace] ?? product.asin,
+        asin: product.asinByMarketplace?.[marketplace] ?? baseAsin,
         listed: (product.availableIn ?? []).includes(marketplace),
         isDefault: marketplace === config.defaultMarketplace,
       })
@@ -122,7 +127,7 @@ export async function runCheck(
     }
   }
 
-  printTable(outcomes)
+  printCheckTable(outcomes)
 
   const adds = outcomes.filter((o) => o.action === 'add')
   const removes = outcomes.filter((o) => o.action === 'remove')
@@ -189,7 +194,7 @@ const ACTION_LABELS: Readonly<Record<CheckAction, string>> = {
   unverified: '? unverified',
 }
 
-function printTable(
+function printCheckTable(
   outcomes: readonly { target: CheckTarget; status: ListingStatus; action: CheckAction }[],
 ): void {
   const rows = outcomes.map((o) => [
@@ -200,14 +205,7 @@ function printTable(
     ACTION_LABELS[o.action],
   ])
   const header = ['product', 'marketplace', 'asin', 'result', 'action']
-  const widths = header.map((h, col) =>
-    Math.max(h.length, ...rows.map((row) => (row[col] ?? '').length)),
-  )
-  const format = (row: readonly string[]): string =>
-    row.map((cell, col) => (cell ?? '').padEnd(widths[col] ?? 0)).join('  ')
-  console.log(format(header))
-  console.log(widths.map((w) => '-'.repeat(w)).join('  '))
-  for (const row of rows) console.log(format(row))
+  printTable(header, rows)
 }
 
 function applyToRaw(

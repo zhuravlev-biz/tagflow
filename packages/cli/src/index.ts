@@ -14,3 +14,23 @@ export {
 export { checkTargets, evaluate, runCheck, type CheckAction, type CheckTarget } from './commands/check.js'
 export { runValidate } from './commands/validate.js'
 export { runInit } from './commands/init.js'
+export { runStats } from './commands/stats.js'
+export { runImportEarnings } from './commands/import-earnings.js'
+export {
+  aggregateByTag,
+  marketplacesForTag,
+  parseAmount,
+  parseEarningsReport,
+  type EarningsRow,
+  type TagTotals,
+} from './earnings/report.js'
+export {
+  aeQuery,
+  AeError,
+  credentialsFromEnv,
+  isSafeDatasetName,
+  type AeCredentials,
+  type AeQueryResult,
+  type AeRow,
+  type FetchLike,
+} from './stats/ae.js'

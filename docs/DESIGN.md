@@ -172,29 +172,75 @@ projects prove both demand and the distribution model.
 
 ### Functional (SHOULD, v0.2+)
 
-> **Status (2026-07-18): F13–F17 all ⬜ Not done** — none implemented yet;
-> tracked for v0.2/v0.3 per the roadmap (§13).
+> **Status (2026-07-19): F13–F17 all ✅ Done.** Implemented in one pass;
+> verified against `packages/core/src/config.ts`/`resolve.ts`,
+> `packages/cloudflare/src/handler.ts`/`choice-page.ts`, and
+> `packages/cli/src/commands/stats.ts`/`import-earnings.ts`. Curated-mode
+> precedence when several features are configured on one product (documented
+> here, encoded in `resolveCurated()`): **mobile deep link (F16) → choice
+> page (F14) → retailer destination (F15) → Amazon waterfall (with F13
+> variants)**. `parseConfig` warns when `choice: true` makes a configured
+> `destination` dead config.
 
-- **F13 — A/B variants.** ⬜ Not done — no `variant`/weighting concept in
-  `config.ts`, `resolve.ts`, or types. Weighted destination variants per product, stateless
-  random assignment per click (no cookies), `variant` dimension in analytics.
-- **F14 — Choice pages.** ⬜ Not done — no multi-retailer HTML rendering
-  anywhere in `packages/cloudflare/src`. Optional per-product multi-retailer page (Amazon +
-  other stores) rendered by the Worker: single self-contained HTML response,
-  inline CSS, no external assets, light/dark aware.
-- **F15 — Non-Amazon destinations.** ⬜ Not done — `resolve.ts` only produces
-  `https://www.amazon.<domain>/dp/<asin>` URLs; no generic retailer-URL model
-  yet. Generalize the destination model so a
-  product can route to arbitrary per-country retailer URLs (config-supplied,
-  tag logic bypassed). Design the config for this now (§6) even though v0.1
-  implements Amazon only.
-- **F16 — Device routing.** ⬜ Not done — `ua.ts` only classifies
-  `desktop|mobile|bot` for analytics; no deep-link routing logic exists. UA-based mobile deep links (app URLs) where
-  configured.
-- **F17 — Earnings correlation.** ⬜ Not done — no `import-earnings` command
-  or earnings-CSV code anywhere in the repo. CLI import of Associates earnings reports
-  (CSV) joined against click data by tracking tag + date for a
-  clicks-vs-orders view per marketplace.
+- **F13 — A/B variants.** ✅ Done — `ProductConfig.variants` in `config.ts`
+  (record of `{ weight, asin?, asinByMarketplace? }`, weights positive and
+  finite); `selectVariant()` in `resolve.ts` does a cumulative-weight walk
+  over `random * totalWeight`. Randomness is injected via
+  `ClickContext.random` (the adapter passes `Math.random()`; core stays pure
+  per N3 — `random` omitted/out-of-range degrades deterministically to the
+  first variant). The assigned variant name rides on the redirect decision
+  and is logged as analytics blob 6 (empty when no variants). Stateless, no
+  cookies. A variant's `asin`/`asinByMarketplace` replace the base fields
+  wholesale (no per-key merge — mixing a variant's base ASIN with the base
+  product's per-marketplace overrides would pair unrelated listings).
+  Variants require a base `asin`, apply only to the Amazon waterfall (not to
+  retailer redirects or choice pages), and never affect marketplace choice
+  or availability gating. Raw-ASIN mode is unaffected.
+- **F14 — Choice pages.** ✅ Done — `ProductConfig.choice: true` makes
+  `resolve()` return a `{ type: 'choice', entries }` decision; entries are
+  Amazon (full tag waterfall, when `asin` is set) plus every retailer with a
+  URL for the visitor's country. `renderChoicePage()` in
+  `packages/cloudflare/src/choice-page.ts` renders it: single self-contained
+  HTML response, inline CSS only, zero scripts/external assets, light/dark
+  via `color-scheme` + `prefers-color-scheme`, `rel="sponsored nofollow
+  noopener"` on every link, all interpolations HTML-escaped. Served 200 with
+  `no-store` + `noindex` (same posture as redirects, §8). Load-time
+  validation guarantees a choice page always has ≥1 entry for any country;
+  a page with <2 possible destinations warns ("just a slower redirect").
+  Choice views are logged with reason `choice` and an empty marketplace
+  blob; the stats leak report keys on the two `fallback-*` reasons only, so
+  choice traffic never reads as a leak.
+- **F15 — Non-Amazon destinations.** ✅ Done — `ProductConfig.retailers`
+  (record of `{ label, url?, urlByCountry? }`, http(s)-validated, `amazon`
+  reserved) plus `destination: "<retailerKey>"` route `/go/<key>` to a
+  per-country retailer URL: `urlByCountry[country] ?? url`, else fall back
+  to the Amazon waterfall. Tag logic is bypassed by design (`{ type:
+  'external' }` decision, reason `retailer`, logged as `ext:<key>`).
+  `asin` is now optional — but only when the destination retailer has a
+  catch-all `url` (resolution must terminate for every country, F3);
+  `availableIn`/`asinByMarketplace`/`variants` without an `asin` are
+  rejected as dead config.
+- **F16 — Device routing.** ✅ Done — `ProductConfig.deepLinks.mobile`
+  (`{ url?, urlByCountry? }`; app schemes like `myapp://…` allowed). The
+  adapter classifies the UA once and injects `ClickContext.device`; core
+  does no UA parsing. For `device === 'mobile'`, a resolvable deep link
+  wins over everything else (that is what deep links are for);
+  no URL for the visitor's country → normal resolution (opportunistic, never
+  an error). Logged as `ext:mobile` with reason `mobile-deeplink`. Bots and
+  desktop always get the web flow.
+- **F17 — Earnings correlation.** ✅ Done — `tagflow import-earnings
+  <report.csv> [config-path]` (`packages/cli/src/commands/import-earnings.ts`
+  + pure parser in `src/earnings/report.ts`): parses Associates
+  earnings/orders reports (CSV or TSV, RFC 4180 quoting, preamble-line and
+  header/column sniffing, US + European number formats, several date
+  formats), aggregates per tracking tag, maps tags → marketplaces via
+  `config.tags` (unknown tags surface as `?` with a warning), and joins
+  clicks from the AE SQL API over the report's date range for a
+  clicks-vs-orders/conv% view per marketplace. Click join degrades
+  gracefully (missing credentials, API errors, `--no-clicks` → earnings-only
+  view, still exit 0). Currency-mixing guard: the totals row only sums
+  earnings when all rows share one marketplace; conv% is `—` when a tag maps
+  to more than one marketplace (ambiguous join).
 
 ### Non-functional
 
@@ -279,11 +325,39 @@ Single JSON file, imported/bundled at build time. Shape (illustrative values):
       "asin": "B0XXXXXXXX",
       "asinByMarketplace": { "co.uk": "B0YYYYYYYY" },
       "availableIn": ["es", "de", "fr", "it", "com"],
-      // v0.2+: variants, retailers, deepLinks live here
+      // A/B variants (F13): weighted, stateless per click; a variant's asin
+      // fields replace the base fields wholesale. Assigned variant name is
+      // logged as the `variant` analytics dimension.
+      "variants": {
+        "control": { "weight": 3 },
+        "new-listing": { "weight": 1, "asin": "B0ZZZZZZZZ" }
+      },
+      // Non-Amazon retailers (F15) — also the entries of a choice page (F14).
+      "retailers": {
+        "bol": {
+          "label": "Bol.com",
+          "url": "https://www.bol.com/nl/p/…",
+          "urlByCountry": { "BE": "https://www.bol.com/be/p/…" }
+        }
+      },
+      // Route /go/flagship-product to a retailer instead of Amazon (F15).
+      // Falls back to the Amazon waterfall when the retailer has no URL for
+      // the visitor's country. Default: "amazon".
+      "destination": "amazon",
+      // Render a multi-retailer choice page instead of redirecting (F14).
+      "choice": false,
+      // Mobile visitors get this instead, when a URL resolves (F16).
+      // App schemes allowed.
+      "deepLinks": { "mobile": { "url": "amzn://…" } }
     }
   }
 }
 ```
+
+`asin` may be omitted only when `destination` names a retailer with a
+catch-all `url` (resolution must terminate for every country). Feature
+precedence per product: deep link (mobile) → choice → destination →
+Amazon waterfall.
 
 Marketplace identifiers are the Amazon domain suffixes: `com`, `co.uk`, `de`,
 `fr`, `it`, `es`, `nl`, `pl`, `se`, `com.be`, `ca`, `com.mx`, `com.br`,
@@ -302,11 +376,23 @@ coverage.
 
 ## 7 · Resolution algorithm (spec)
 
-`resolve(ctx, config)` where `ctx = { country?, path, userAgent? }`:
+`resolve(ctx, config)` where `ctx = { country?, path, userAgent?, device?,
+random? }` — `device` is the adapter's UA classification (core does no UA
+parsing) and `random` is an injected uniform number in [0, 1) (core has no
+randomness, N3):
 
 1. **Parse route.** `/go/<productKey>` (curated) or `/go/amazon/<asin>` (raw).
    Unknown product key → `404` decision (host site's 404, or JSON in
    standalone mode). Reserved segment `amazon` cannot be a product key (F12).
+1a. **Mobile deep link (F16).** `device === 'mobile'` and
+   `deepLinks.mobile` resolves a URL for the country → `external` decision,
+   reason `mobile-deeplink`. Otherwise fall through.
+1b. **Choice page (F14).** `choice: true` → `choice` decision with one entry
+   per resolvable destination (Amazon via the waterfall below, retailers via
+   their country URL). Variants do not apply on choice pages.
+1c. **Retailer destination (F15).** `destination` names a retailer →
+   `urlByCountry[country] ?? url` → `external` decision, reason `retailer`;
+   no URL for this country → continue with the Amazon waterfall.
 2. **Candidate marketplace** = `countryOverrides[country]` ??
    `COUNTRY_TO_MARKETPLACE[country]` ?? `defaultMarketplace`.
 3. **Gate chain.** A marketplace passes if it has a tag AND (curated mode) the
@@ -315,14 +401,21 @@ coverage.
    gate failed as `resolutionReason`. (Chain is ≤3 hops by construction; no
    loops possible since fallbacks are validated non-cyclic at load.)
 4. **Raw-ASIN mode** skips the availability gate and applies `unknownAsin`
-   policy at step 2.
-5. **ASIN selection**: `asinByMarketplace[final] ?? asin`.
+   policy at step 2. Variants, deep links, retailers and choice pages never
+   apply in raw mode.
+5. **Variant + ASIN selection (F13)**: pick the variant by cumulative weight
+   against `random * totalWeight` (insertion order fixes the walk; same
+   `random` → same variant). Effective fields: a variant's
+   `asin`/`asinByMarketplace` replace the base fields wholesale. Then
+   `asinByMarketplace[final] ?? asin`.
 6. **Decision**: `{ url: "https://www.amazon.<domain>/dp/<asin>?tag=<tag>",
-   marketplace, resolutionReason, productKey }`. URL-encode ASIN and tag.
+   marketplace, resolutionReason, productKey, variant? }`. URL-encode ASIN
+   and tag.
 
 Property tests worth writing: resolution is total (never throws for any
 country string), always returns a tagged Amazon URL for known products,
-respects `availableIn` exactly, and is pure (same input → same output).
+respects `availableIn` exactly, and is pure (same input → same output —
+`random` is part of the input).
 
 ## 8 · Cloudflare adapter (spec)
 
@@ -345,6 +438,12 @@ respects `availableIn` exactly, and is pure (same input → same output).
   and are not logged.
 - Bot policy (`opts.bots`): `"redirect"` (default; logged with `uaClass=bot`)
   or `"ignore"` (redirect but skip logging).
+- The handler injects `device` (its UA classification) and `random`
+  (`Math.random()`) into `resolve()` — F16 routing and F13 assignment live
+  in core, but the impurity stays in the adapter (N3). `external` decisions
+  get the same 302 + headers as Amazon redirects; `choice` decisions are
+  served 200 `text/html` from `renderChoicePage()` with the same
+  `no-store`/`noindex` posture.
 - Standalone template: `index.ts` is ~10 lines wiring the handler + a 404
   JSON fallback; `wrangler.jsonc` includes the Analytics Engine binding
   commented-in with a note that it's free.
@@ -367,22 +466,27 @@ export default {
 ## 9 · Analytics (spec)
 
 - Workers Analytics Engine dataset, one point per click:
-  `blobs: [country, marketplace, productKey, resolutionReason, uaClass]`,
-  `doubles: [1]`, `indexes: [productKey]`.
+  `blobs: [country, marketplace, productKey, resolutionReason, uaClass,
+  variant]`, `doubles: [1]`, `indexes: [productKey]`. Since v0.2: blob 2 is
+  `ext:<retailer>`/`ext:mobile` for non-Amazon redirects (F15/F16) and empty
+  for choice views; blob 4 gains the values `retailer`, `mobile-deeplink`
+  and `choice`; blob 6 is the A/B variant name (F13) or empty.
 - Documented facts (verified 2026-07): AE is available **on the free plan** —
   100k data points written/day and 10k read queries/day; paid plan includes
   10M points/month (+$0.25/M) and 1M queries/month (+$1/M); Cloudflare is not
   yet billing for AE at all. Cite the pricing page in docs and date the claim.
-- The operationally important query (ship it in the CLI, promote it in the
-  README): *clicks where `resolutionReason != 'direct'`, grouped by product ×
+- The operationally important query (shipped as `tagflow stats --leaks`,
+  promote it in the README): *clicks where `resolutionReason` is
+  `fallback-no-tag` or `fallback-unavailable`, grouped by product ×
   marketplace* — that is the "this listing died / this geo leaks revenue"
-  monitor that paid services charge for.
+  monitor that paid services charge for. (Deliberately not
+  `!= 'direct'`: `unknown-country`, `raw-asin` and `choice` traffic is not
+  a leak.)
 
 ## 10 · CLI (spec)
 
-> **Status (2026-07-18):** `init`/`validate`/`check` ✅ Done; `stats` and
-> `import-earnings` ⬜ Not done (tracked for v0.2/v0.3, consistent with the
-> roadmap).
+> **Status (2026-07-19):** all five commands ✅ Done —
+> `init`/`validate`/`check`/`stats`/`import-earnings`.
 
 Node CLI (`npx <pkg> …`), runs on the user's machine — never in the Worker:
 
@@ -433,11 +537,19 @@ Node CLI (`npx <pkg> …`), runs on the user's machine — never in the Worker:
     `onWarn` diagnostic callback (`EngineIo.onWarn`), wired to `console.error`
     in `check.ts`, so network errors and non-200 responses are surfaced as
     warnings instead of being silently folded into `unknown`.
-- **`stats`** ⬜ Not done — no command wired in `packages/cli/src/cli.ts`, no
-  AE SQL API querying code anywhere in the repo. Query AE's SQL API (needs account ID + API token via env
-  vars): clicks by country/marketplace/product/reason over a window; the
-  fallback-leak report from §9.
-- **`import-earnings`** ⬜ Not done (v0.3, F17) — absent entirely.
+- **`stats`** ✅ Done — `packages/cli/src/commands/stats.ts` on top of the
+  minimal AE SQL client in `src/stats/ae.ts` (fetch injectable for tests;
+  credentials via `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN`, the same
+  env vars wrangler uses; token needs "Account Analytics: Read"). Default
+  report: clicks by marketplace × reason plus top products over `--days`
+  (default 7); `--leaks` runs the §9 fallback-leak report. Counts use
+  `SUM(_sample_interval)`, not `count()` — AE samples. The dataset name is
+  interpolated into SQL as an identifier, so it is shape-validated
+  (`isSafeDatasetName`) instead of quoted; `--days`/`--limit` are
+  range-checked.
+- **`import-earnings`** ✅ Done (F17) — see the F17 status in §4 for
+  behavior; `packages/cli/src/commands/import-earnings.ts` + pure
+  parser/aggregator in `src/earnings/report.ts`.
 
 ## 11 · Compliance & privacy (ship as a docs page, encode as defaults)
 
@@ -480,6 +592,11 @@ This section is a differentiator — every DIY blog post hand-waves it.
   with no dupes. Status (2026-07-19): `vitest.config.ts` also gates
   `config.ts` coverage now (branches 90% / lines+statements 93% floors, set
   just below actual post-fix coverage so it can't silently regress).
+  Status (2026-07-19, F13–F16 landing): core suite grew 51 → 128 tests;
+  `resolve.ts` branch threshold relaxed 100% → 97% for exactly three
+  provably-unreachable defensive guards (enumerated in a comment in
+  `vitest.config.ts`); lines/statements/functions on `resolve.ts` remain
+  100%.
 - `cloudflare`: `@cloudflare/vitest-pool-workers` (Workers runtime tests:
   route matching, mounted-mode `null` contract, headers, `waitUntil` logging;
   simulate `request.cf` variants including missing `cf`). 🟡 Partial —
@@ -487,6 +604,9 @@ This section is a differentiator — every DIY blog post hand-waves it.
   matching, `null` contract, headers, `waitUntil`) but via plain vitest with
   hand-mocked `Request`/`cf`/`ctx` objects, not an actual Workers runtime —
   `@cloudflare/vitest-pool-workers` is not a dependency anywhere in the repo.
+  Status (2026-07-19): 29 tests after F13–F16 — choice-page rendering/
+  escaping/self-containment (`choice-page.test.ts`) and handler coverage for
+  choice responses, variant blobs, `ext:*` logging and deep-link routing.
 - `cli`: golden-file tests for `validate`/`check` output; probe engine mocked.
   🟡 Partial — `packages/cli/test/commands.test.ts` and `engines.test.ts` are
   thorough behavioral tests (exit codes, config diffs, mocked engines) but
@@ -498,7 +618,9 @@ This section is a differentiator — every DIY blog post hand-waves it.
   classification in the probe engine, and a frozen golden-value test for the
   SigV4 signer (`engines.test.ts`, "matches a frozen golden signature for a
   fixed input") — still not golden-file/snapshot comparisons of CLI stdout,
-  so the mechanism gap noted above stands.
+  so the mechanism gap noted above stands. Status (2026-07-19, `stats` +
+  `import-earnings` landing): 66 tests across 5 files (`stats.test.ts` and
+  `earnings.test.ts` added; both use an injected fake `fetch` — no network).
 - GitHub Actions: lint (Biome) + typecheck + test on PR; release
   via changesets → npm (provenance enabled); template repo smoke-deploy job
   with `wrangler deploy --dry-run`. Lint+typecheck+test ✅ Done and template
@@ -524,8 +646,8 @@ This section is a differentiator — every DIY blog post hand-waves it.
 | Version | Status | Scope |
 |---|---|---|
 | **v0.1** | ✅ Done | F1–F12, N1–N5; `core` + `cloudflare` + `cli init/validate/check`; standalone template + mounted Astro example; README + compliance doc. Ship when the mounted example runs on a real site. Exit criterion met — the Astro mounted example is built and runnable (`examples/astro-static-assets`). Remaining v0.1-adjacent gaps: changesets release workflow, Workers-runtime tests via `vitest-pool-workers`, and CLI golden-file tests (see §12) are not yet done but were not v0.1 MUSTs. Status (2026-07-19): the copied-out-template gap closed — `template-copyout` CI job + exact-pinned `templates/worker` deps (see §12) now prove the documented user flow works outside the workspace. |
-| **v0.2** | ⬜ Not started | `stats` CLI + fallback-leak report; A/B variants (F13); choice pages (F14); migrate `check`'s API engine from PA-API to the Creators API (§10, §15 — PA-API's deprecation date has passed). |
-| **v0.3** | ⬜ Not started | Non-Amazon destinations (F15); device routing (F16); earnings import (F17). |
+| **v0.2** | 🟡 Feature-complete (2026-07-19) | `stats` CLI + fallback-leak report ✅; A/B variants (F13) ✅; choice pages (F14) ✅. Remaining: migrate `check`'s API engine from PA-API to the Creators API (§10, §15 — PA-API's deprecation date has passed), and the release plumbing (changesets → npm) before anything can actually ship as 0.2.0. |
+| **v0.3** | 🟡 Feature-complete (2026-07-19) | Non-Amazon destinations (F15) ✅; device routing (F16) ✅; earnings import (F17) ✅. Implemented alongside v0.2 — one config-schema change instead of two. |
 | **v1.0** | ⬜ Not started | API freeze, schema `v1` frozen, docs site. |
 | Post-1.0 (maybe) | ⬜ Not started | Read-only stats dashboard (static page over AE API, Sink-style); KV-backed config adapter for no-rebuild updates. |
 

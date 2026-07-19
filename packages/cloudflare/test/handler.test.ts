@@ -166,7 +166,8 @@ describe('createAffiliateHandler', () => {
     await Promise.all(ctx.promises)
     expect(writeDataPoint).toHaveBeenCalledExactlyOnceWith({
       // FR maps to fr, which has no tag → fallback chain ends at default es.
-      blobs: ['FR', 'es', 'widget', 'fallback-no-tag', 'desktop'],
+      // Trailing '' is the A/B variant slot (F13); this product has none.
+      blobs: ['FR', 'es', 'widget', 'fallback-no-tag', 'desktop', ''],
       doubles: [1],
       indexes: ['widget'],
     })
@@ -306,6 +307,153 @@ describe('createAffiliateWorker', () => {
     )
     expect(missing.status).toBe(404)
     expect(await missing.json()).toEqual({ error: 'not found' })
+  })
+})
+
+describe('createAffiliateHandler choice pages (F14)', () => {
+  const CHOICE_CONFIG = {
+    defaultMarketplace: 'es',
+    tags: { es: 'tag-es-21', de: 'tag-de-21' },
+    products: {
+      pick: {
+        asin: 'B0AAAAAAAA',
+        availableIn: ['es', 'de'],
+        retailers: { bol: { label: 'Bol.com', url: 'https://www.bol.com/x' } },
+        choice: true,
+      },
+    },
+  }
+
+  it('renders a 200 HTML choice page with both links and the F14/F9 headers', async () => {
+    const handler = createAffiliateHandler(CHOICE_CONFIG)
+    const writeDataPoint = vi.fn()
+    const ctx = makeCtx()
+    const response = await handler(
+      makeRequest('https://site.example/go/pick', { country: 'DE', userAgent: DESKTOP_UA }),
+      { CLICKS: { writeDataPoint } },
+      ctx,
+    )
+    expect(response?.status).toBe(200)
+    expect(response?.headers.get('content-type')).toMatch(/^text\/html/)
+    expect(response?.headers.get('cache-control')).toBe('no-store')
+    expect(response?.headers.get('x-robots-tag')).toBe('noindex')
+    const body = await response?.text()
+    expect(body).toContain('https://www.amazon.de/dp/B0AAAAAAAA?tag=tag-de-21')
+    expect(body).toContain('https://www.bol.com/x')
+
+    await Promise.all(ctx.promises)
+    const blobs = writeDataPoint.mock.calls[0]?.[0].blobs
+    // blobs = [country, marketplace, productKey, reason, uaClass, variant]
+    // (0-indexed) — a choice view has no single destination, so blobs[1] is
+    // empty, and blobs[3] (the resolution reason slot) is "choice".
+    expect(blobs?.[3]).toBe('choice')
+    expect(blobs?.[1]).toBe('')
+  })
+})
+
+describe('createAffiliateHandler A/B variants (F13)', () => {
+  const VARIANT_CONFIG = {
+    defaultMarketplace: 'es',
+    tags: { es: 'tag-es-21', de: 'tag-de-21' },
+    products: {
+      multi: {
+        asin: 'B0CCCCCCCC',
+        availableIn: ['es', 'de'],
+        variants: { a: { weight: 1 }, b: { weight: 1, asin: 'B0BBBBBBBB' } },
+      },
+    },
+  }
+
+  it('logs 6 blobs with the assigned variant name in the 6th', async () => {
+    const handler = createAffiliateHandler(VARIANT_CONFIG)
+    const writeDataPoint = vi.fn()
+    const ctx = makeCtx()
+    const response = await handler(
+      makeRequest('https://site.example/go/multi', { country: 'DE', userAgent: DESKTOP_UA }),
+      { CLICKS: { writeDataPoint } },
+      ctx,
+    )
+    expect(response?.status).toBe(302)
+    await Promise.all(ctx.promises)
+    const blobs = writeDataPoint.mock.calls[0]?.[0].blobs
+    expect(blobs).toHaveLength(6)
+    expect(['a', 'b']).toContain(blobs?.[5])
+  })
+})
+
+describe('createAffiliateHandler retailer destinations (F15)', () => {
+  const RETAILER_CONFIG = {
+    defaultMarketplace: 'es',
+    tags: { es: 'tag-es-21', de: 'tag-de-21' },
+    products: {
+      destProd: {
+        destination: 'bol',
+        retailers: { bol: { label: 'Bol.com', url: 'https://www.bol.com/y' } },
+      },
+    },
+  }
+
+  it('302s straight to the retailer URL and logs ext:<key>/retailer', async () => {
+    const handler = createAffiliateHandler(RETAILER_CONFIG)
+    const writeDataPoint = vi.fn()
+    const ctx = makeCtx()
+    const response = await handler(
+      makeRequest('https://site.example/go/destProd', { country: 'DE', userAgent: DESKTOP_UA }),
+      { CLICKS: { writeDataPoint } },
+      ctx,
+    )
+    expect(response?.status).toBe(302)
+    expect(response?.headers.get('location')).toBe('https://www.bol.com/y')
+    await Promise.all(ctx.promises)
+    const blobs = writeDataPoint.mock.calls[0]?.[0].blobs
+    expect(blobs?.[1]).toBe('ext:bol')
+    expect(blobs?.[3]).toBe('retailer')
+  })
+})
+
+describe('createAffiliateHandler mobile deep links (F16)', () => {
+  const DEEPLINK_CONFIG = {
+    defaultMarketplace: 'es',
+    tags: { es: 'tag-es-21', de: 'tag-de-21' },
+    products: {
+      deepProd: {
+        asin: 'B0DDDDDDDD',
+        availableIn: ['es', 'de'],
+        deepLinks: { mobile: { url: 'myapp://product/1' } },
+      },
+    },
+  }
+  const IPHONE_UA =
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1'
+
+  it('302s a mobile visitor to the deep link and logs ext:mobile/mobile-deeplink', async () => {
+    const handler = createAffiliateHandler(DEEPLINK_CONFIG)
+    const writeDataPoint = vi.fn()
+    const ctx = makeCtx()
+    const response = await handler(
+      makeRequest('https://site.example/go/deepProd', { country: 'DE', userAgent: IPHONE_UA }),
+      { CLICKS: { writeDataPoint } },
+      ctx,
+    )
+    expect(response?.status).toBe(302)
+    expect(response?.headers.get('location')).toBe('myapp://product/1')
+    await Promise.all(ctx.promises)
+    const blobs = writeDataPoint.mock.calls[0]?.[0].blobs
+    expect(blobs?.[1]).toBe('ext:mobile')
+    expect(blobs?.[3]).toBe('mobile-deeplink')
+  })
+
+  it('302s a desktop visitor to the normal Amazon redirect instead', async () => {
+    const handler = createAffiliateHandler(DEEPLINK_CONFIG)
+    const response = await handler(
+      makeRequest('https://site.example/go/deepProd', { country: 'DE', userAgent: DESKTOP_UA }),
+      {},
+      makeCtx(),
+    )
+    expect(response?.status).toBe(302)
+    expect(response?.headers.get('location')).toBe(
+      'https://www.amazon.de/dp/B0DDDDDDDD?tag=tag-de-21',
+    )
   })
 })
 

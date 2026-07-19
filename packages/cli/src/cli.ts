@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { argv, exit } from 'node:process'
 import { runCheck } from './commands/check.js'
+import { runImportEarnings } from './commands/import-earnings.js'
 import { runInit } from './commands/init.js'
+import { runStats } from './commands/stats.js'
 import { runValidate } from './commands/validate.js'
 
 const HELP = `TagFlow — localized Amazon affiliate links on Cloudflare Workers
@@ -18,6 +20,15 @@ Usage:
       with --write. Exit 2 when a previously-available listing disappeared.
       The paapi engine reads PAAPI_ACCESS_KEY / PAAPI_SECRET_KEY env vars.
 
+  tagflow stats [--dataset <name>] [--days <n>] [--limit <n>] [--leaks]
+      Click stats from Workers Analytics Engine; --leaks shows clicks that
+      fell back past their geo marketplace (the revenue-leak monitor).
+      Reads CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN env vars.
+
+  tagflow import-earnings <report.csv> [config-path] [--dataset <name>] [--no-clicks]
+      Join an Associates earnings report against click data by tracking
+      tag + date: clicks vs orders per marketplace.
+
   tagflow help
       Show this message.
 `
@@ -31,6 +42,10 @@ async function main(): Promise<number> {
       return runValidate(rest)
     case 'check':
       return runCheck(rest)
+    case 'stats':
+      return runStats(rest)
+    case 'import-earnings':
+      return runImportEarnings(rest)
     case 'help':
     case '--help':
     case '-h':
