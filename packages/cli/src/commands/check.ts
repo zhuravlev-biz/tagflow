@@ -2,7 +2,7 @@ import { env } from 'node:process'
 import { parseArgs } from 'node:util'
 import type { Config, MarketplaceId } from '@tagflow/core'
 import {
-  createPaapiEngine,
+  createCreatorsApiEngine,
   createProbeEngine,
   type CheckEngine,
   type ListingStatus,
@@ -160,28 +160,38 @@ function selectEngine(
     console.error('✗ --delay-ms must be a non-negative number')
     return undefined
   }
-  const accessKey = env['PAAPI_ACCESS_KEY']
-  const secretKey = env['PAAPI_SECRET_KEY']
-  const chosen = engineName ?? (accessKey !== undefined && secretKey !== undefined ? 'paapi' : 'probe')
+  const credentialId = env['CREATORSAPI_CREDENTIAL_ID']
+  const credentialSecret = env['CREATORSAPI_CREDENTIAL_SECRET']
+  const chosen =
+    engineName ?? (credentialId !== undefined && credentialSecret !== undefined ? 'creatorsapi' : 'probe')
   const delayOption = delayMs === undefined ? {} : { delayMs }
   const onWarn = (message: string): void => console.error(`  warning: ${message}`)
 
   if (chosen === 'probe') return createProbeEngine({ ...delayOption, onWarn })
   if (chosen === 'paapi') {
-    if (accessKey === undefined || secretKey === undefined) {
-      console.error('✗ the paapi engine needs PAAPI_ACCESS_KEY and PAAPI_SECRET_KEY env vars')
+    console.error(
+      '✗ the paapi engine was retired along with PA-API (Amazon shut it down 2026-05-15) — use --engine creatorsapi instead',
+    )
+    return undefined
+  }
+  if (chosen === 'creatorsapi') {
+    if (credentialId === undefined || credentialSecret === undefined) {
+      console.error(
+        '✗ the creatorsapi engine needs CREATORSAPI_CREDENTIAL_ID and CREATORSAPI_CREDENTIAL_SECRET env vars',
+      )
       return undefined
     }
-    return createPaapiEngine(
+    const tokenUrl = env['CREATORSAPI_TOKEN_URL']
+    return createCreatorsApiEngine(
       {
-        accessKey,
-        secretKey,
+        credentialId,
+        credentialSecret,
         partnerTagFor: (marketplace) => config.tags[marketplace],
       },
-      { ...delayOption, onWarn },
+      { ...delayOption, ...(tokenUrl === undefined ? {} : { tokenUrl }), onWarn },
     )
   }
-  console.error(`✗ unknown engine "${chosen}" (expected "probe" or "paapi")`)
+  console.error(`✗ unknown engine "${chosen}" (expected "probe" or "creatorsapi")`)
   return undefined
 }
 

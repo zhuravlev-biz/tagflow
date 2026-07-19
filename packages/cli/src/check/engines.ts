@@ -1,5 +1,4 @@
 import { AMAZON_DOMAINS, type MarketplaceId } from '@tagflow/core'
-import { signRequest } from './sigv4.js'
 
 export type ListingStatus = 'ok' | 'missing' | 'unknown'
 
@@ -97,125 +96,151 @@ export function createProbeEngine(options: { delayMs?: number } & EngineIo = {})
   }
 }
 
-export interface PaapiCredentials {
-  readonly accessKey: string
-  readonly secretKey: string
+export interface CreatorsApiCredentials {
+  readonly credentialId: string
+  readonly credentialSecret: string
   /** Partner tag per marketplace — taken from the config's `tags`. */
   readonly partnerTagFor: (marketplace: MarketplaceId) => string | undefined
 }
 
-/** PA-API 5 endpoints per marketplace (host + signing region). */
-export const PAAPI_ENDPOINTS: Readonly<
-  Partial<Record<MarketplaceId, { host: string; region: string }>>
-> = {
-  com: { host: 'webservices.amazon.com', region: 'us-east-1' },
-  'co.uk': { host: 'webservices.amazon.co.uk', region: 'eu-west-1' },
-  de: { host: 'webservices.amazon.de', region: 'eu-west-1' },
-  fr: { host: 'webservices.amazon.fr', region: 'eu-west-1' },
-  it: { host: 'webservices.amazon.it', region: 'eu-west-1' },
-  es: { host: 'webservices.amazon.es', region: 'eu-west-1' },
-  nl: { host: 'webservices.amazon.nl', region: 'eu-west-1' },
-  pl: { host: 'webservices.amazon.pl', region: 'eu-west-1' },
-  se: { host: 'webservices.amazon.se', region: 'eu-west-1' },
-  'com.be': { host: 'webservices.amazon.com.be', region: 'eu-west-1' },
-  ca: { host: 'webservices.amazon.ca', region: 'us-east-1' },
-  'com.mx': { host: 'webservices.amazon.com.mx', region: 'us-east-1' },
-  'com.br': { host: 'webservices.amazon.com.br', region: 'us-east-1' },
-  'co.jp': { host: 'webservices.amazon.co.jp', region: 'us-west-2' },
-  in: { host: 'webservices.amazon.in', region: 'eu-west-1' },
-  sg: { host: 'webservices.amazon.sg', region: 'us-west-2' },
-  'com.au': { host: 'webservices.amazon.com.au', region: 'us-west-2' },
-  ae: { host: 'webservices.amazon.ae', region: 'eu-west-1' },
-  sa: { host: 'webservices.amazon.sa', region: 'eu-west-1' },
-  'com.tr': { host: 'webservices.amazon.com.tr', region: 'eu-west-1' },
-  eg: { host: 'webservices.amazon.eg', region: 'eu-west-1' },
+/** Single global endpoint; the target marketplace is signaled by a header/body field instead of the host. */
+const CREATORS_API_GETITEMS_URL = 'https://creatorsapi.amazon/catalog/v1/getItems'
+
+/**
+ * OAuth2 client-credentials token endpoint for "v3.x" (Login-with-Amazon)
+ * Creators API credentials — the flow Associates Central issues by default
+ * post-migration. Override via `tokenUrl` for the EU/FE regional variants
+ * (`api.amazon.co.uk` / `api.amazon.co.jp`) or a legacy "v2.x" Cognito
+ * credential, both shown on the credential's own Associates Central page.
+ */
+const CREATORS_API_DEFAULT_TOKEN_URL = 'https://api.amazon.com/auth/o2/token'
+
+interface CreatorsApiTokenResponse {
+  access_token?: string
+  expires_in?: number
 }
 
-interface PaapiGetItemsResponse {
-  ItemsResult?: { Items?: { ASIN?: string }[] }
-  Errors?: { Code?: string; Message?: string }[]
+interface CreatorsApiGetItemsResponse {
+  itemsResult?: { items?: { asin?: string }[] }
+  errors?: { code?: string; message?: string }[]
 }
 
 /**
- * PA-API 5 GetItems engine — the blessed path when the user has API keys.
- * Batches up to 10 ASINs per request, 1 request/second.
+ * Creators API GetItems engine — the blessed path when the user has API
+ * credentials (PA-API's successor; see §10/§15 of the design doc). Batches up
+ * to 10 ASINs per request, 1 request/second, and caches the bearer token for
+ * the lifetime of the process (a single `check` run), refreshing it 60s
+ * before expiry.
  */
-export function createPaapiEngine(
-  credentials: PaapiCredentials,
-  options: { delayMs?: number; now?: () => Date } & EngineIo = {},
+export function createCreatorsApiEngine(
+  credentials: CreatorsApiCredentials,
+  options: { delayMs?: number; tokenUrl?: string; now?: () => Date } & EngineIo = {},
 ): CheckEngine {
   const fetchFn = options.fetchFn ?? fetch
   const sleep = options.sleep ?? defaultSleep
   const delayMs = options.delayMs ?? 1100
+  const tokenUrl = options.tokenUrl ?? CREATORS_API_DEFAULT_TOKEN_URL
   const now = options.now ?? (() => new Date())
   const onWarn = options.onWarn
 
+  let cachedToken: { value: string; expiresAtMs: number } | undefined
+
+  async function getToken(): Promise<string | undefined> {
+    if (cachedToken !== undefined && cachedToken.expiresAtMs > now().getTime()) {
+      return cachedToken.value
+    }
+    try {
+      const response = await fetchFn(tokenUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'client_credentials',
+          client_id: credentials.credentialId,
+          client_secret: credentials.credentialSecret,
+          scope: 'creatorsapi::default',
+        }),
+      })
+      if (response.status !== 200) {
+        onWarn?.(`creatorsapi token: HTTP ${response.status}`)
+        await response.body?.cancel()
+        return undefined
+      }
+      const payload = (await response.json()) as CreatorsApiTokenResponse
+      if (payload.access_token === undefined) {
+        onWarn?.('creatorsapi token: response had no access_token')
+        return undefined
+      }
+      const expiresInMs = (payload.expires_in ?? 3600) * 1000
+      cachedToken = {
+        value: payload.access_token,
+        expiresAtMs: now().getTime() + expiresInMs - 60_000,
+      }
+      return cachedToken.value
+    } catch (error) {
+      onWarn?.(`creatorsapi token: ${(error as Error).message}`)
+      return undefined
+    }
+  }
+
   return {
-    name: 'paapi',
+    name: 'creatorsapi',
     async check(marketplace, asins) {
       const results = new Map<string, ListingStatus>()
-      const endpoint = PAAPI_ENDPOINTS[marketplace]
       const partnerTag = credentials.partnerTagFor(marketplace)
-      if (endpoint === undefined || partnerTag === undefined) {
+      if (partnerTag === undefined) {
         for (const asin of asins) results.set(asin, 'unknown')
         return results
       }
 
+      const token = await getToken()
+      if (token === undefined) {
+        for (const asin of asins) results.set(asin, 'unknown')
+        return results
+      }
+
+      const marketplaceDomain = AMAZON_DOMAINS[marketplace]
       for (let i = 0; i < asins.length; i += 10) {
         if (i > 0) await sleep(delayMs)
         const batch = asins.slice(i, i + 10)
         const body = JSON.stringify({
-          ItemIds: batch,
-          ItemIdType: 'ASIN',
-          PartnerTag: partnerTag,
-          PartnerType: 'Associates',
-          Marketplace: AMAZON_DOMAINS[marketplace],
-          // Resources omitted: PA-API defaults to ["ItemInfo.Title"], which
-          // is all we need to confirm the ASIN resolves to a live item.
-        })
-        const path = '/paapi5/getitems'
-        const headers = signRequest({
-          method: 'POST',
-          host: endpoint.host,
-          path,
-          region: endpoint.region,
-          service: 'ProductAdvertisingAPI',
-          headers: {
-            'content-type': 'application/json; charset=utf-8',
-            'content-encoding': 'amz-1.0',
-            'x-amz-target': 'com.amazon.paapi5.v1.ProductAdvertisingAPIv1.GetItems',
-          },
-          body,
-          accessKey: credentials.accessKey,
-          secretKey: credentials.secretKey,
-          date: now(),
+          itemIds: batch,
+          itemIdType: 'ASIN',
+          partnerTag,
+          partnerType: 'Associates',
+          marketplace: marketplaceDomain,
+          // resources omitted: the server defaults to ["itemInfo.title"],
+          // which is all we need to confirm the ASIN resolves to a live item.
         })
 
         try {
-          const response = await fetchFn(`https://${endpoint.host}${path}`, {
+          const response = await fetchFn(CREATORS_API_GETITEMS_URL, {
             method: 'POST',
-            headers,
+            headers: {
+              'content-type': 'application/json',
+              authorization: `Bearer ${token}`,
+              'x-marketplace': marketplaceDomain,
+            },
             body,
           })
           if (response.status !== 200 && response.status !== 404) {
             // Auth/throttle problems affect the whole batch.
-            onWarn?.(`paapi ${marketplace}: HTTP ${response.status}`)
+            onWarn?.(`creatorsapi ${marketplace}: HTTP ${response.status}`)
             for (const asin of batch) results.set(asin, 'unknown')
             continue
           }
-          const payload = (await response.json()) as PaapiGetItemsResponse
+          const payload = (await response.json()) as CreatorsApiGetItemsResponse
           const found = new Set(
-            (payload.ItemsResult?.Items ?? [])
-              .map((item) => item.ASIN)
+            (payload.itemsResult?.items ?? [])
+              .map((item) => item.asin)
               .filter((asin): asin is string => typeof asin === 'string'),
           )
           for (const asin of batch) {
-            // PA-API reports unknown/unbuyable ASINs via Errors + omission
-            // from ItemsResult — both mean the listing is dead for linking.
+            // Unknown/unbuyable ASINs are reported via `errors` + omission
+            // from `itemsResult` — both mean the listing is dead for linking.
             results.set(asin, found.has(asin) ? 'ok' : 'missing')
           }
         } catch (error) {
-          onWarn?.(`paapi ${marketplace}: ${(error as Error).message}`)
+          onWarn?.(`creatorsapi ${marketplace}: ${(error as Error).message}`)
           for (const asin of batch) results.set(asin, 'unknown')
         }
       }

@@ -5,11 +5,10 @@
 export { loadConfigFile, writeConfigFile, ConfigError, DEFAULT_CONFIG_PATH } from './config-io.js'
 export {
   createProbeEngine,
-  createPaapiEngine,
-  PAAPI_ENDPOINTS,
+  createCreatorsApiEngine,
   type CheckEngine,
   type ListingStatus,
-  type PaapiCredentials,
+  type CreatorsApiCredentials,
 } from './check/engines.js'
 export { checkTargets, evaluate, runCheck, type CheckAction, type CheckTarget } from './commands/check.js'
 export { runValidate } from './commands/validate.js'

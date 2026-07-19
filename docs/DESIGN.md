@@ -509,25 +509,69 @@ Node CLI (`npx <pkg> …`), runs on the user's machine — never in the Worker:
   exists; update `availableIn` (with `--write`) and print a diff table;
   non-zero exit when a previously-available listing disappears (CI-able as a
   weekly GitHub Action — provide the workflow file in the template).
-  - Two engines: **PA-API** (blessed path when the user has API keys) and
-    **plain HTTPS probe** of the `/dp/` page from the user's own IP.
-    Document clearly: the probe runs client-side at the user's own risk and
-    discretion, is rate-limited with jitter, sends no affiliate tag, and must
-    never be executed from Workers/datacenter infrastructure.
-  - **PA-API deprecation (2026-07-19):** Amazon's PA-API documentation now
-    carries the notice "PA-API will be deprecated on May 15th, 2026. Please
-    migrate to Creators API" (verified live at
-    `webservices.amazon.com/paapi5/documentation/faq.html`; Creators API docs
-    at `affiliate-program.amazon.com/creatorsapi/docs/en-us/introduction`).
-    That date has passed. `--engine paapi` (`packages/cli/src/check/
-    engines.ts`'s `createPaapiEngine`) is therefore deprecated upstream and
-    may stop working without notice. The HTTPS probe engine is unaffected and
-    remains the default for local runs — but note the template's weekly
-    `check-listings.yml` Action uses `--engine paapi` (the probe engine must
-    never run from datacenter IPs, so it is the only CI-appropriate engine),
-    which means the shipped CI monitor degrades to all-`unknown` if Amazon
-    turns PA-API off. Migrating `check`'s API engine from PA-API to the
-    Creators API is tracked as a new v0.2 roadmap item (§13).
+  - Two engines: **Creators API** (blessed path when the user has API
+    credentials) and **plain HTTPS probe** of the `/dp/` page from the user's
+    own IP. Document clearly: the probe runs client-side at the user's own
+    risk and discretion, is rate-limited with jitter, sends no affiliate tag,
+    and must never be executed from Workers/datacenter infrastructure.
+  - **PA-API → Creators API migration (done, 2026-07-19):** PA-API was
+    retired by Amazon on 2026-05-15 ("PA-API will be deprecated on May 15th,
+    2026. Please migrate to Creators API", verified live at
+    `webservices.amazon.com/paapi5/documentation/faq.html`, which also now
+    states the doc site itself "is no longer maintained"). `--engine paapi`
+    and its SigV4 signer (`packages/cli/src/check/sigv4.ts`) are removed
+    outright rather than kept as dead code; `runCheck` rejects
+    `--engine paapi` with a message pointing at the replacement instead of
+    falling through to a generic "unknown engine" error, since the template's
+    shipped CI workflow (and presumably others' scripts) hard-coded that flag
+    value.
+    - New engine: `createCreatorsApiEngine` in `engines.ts`, selected via
+      `--engine creatorsapi` (or auto-selected when
+      `CREATORSAPI_CREDENTIAL_ID`/`CREATORSAPI_CREDENTIAL_SECRET` env vars are
+      set, mirroring the old access/secret-key auto-detection). Auth is OAuth2
+      client-credentials → bearer token (no more hand-rolled request
+      signing): `POST https://api.amazon.com/auth/o2/token` with
+      `grant_type=client_credentials`, `client_id`/`client_secret` from the
+      credential, `scope=creatorsapi::default`; the resulting token is cached
+      in-process for the `check` run's lifetime and refreshed 60s before
+      `expires_in` elapses. `GetItems` becomes a single global endpoint,
+      `POST https://creatorsapi.amazon/catalog/v1/getItems`, with the target
+      marketplace signaled by an `x-marketplace` header + body field (reusing
+      `AMAZON_DOMAINS` from `@tagflow/core`) instead of a per-marketplace host;
+      request/response bodies are the same shape as PA-API's `GetItems` but
+      `lowerCamelCase` (`itemIds`/`itemIdType`/`partnerTag`/`partnerType`/
+      `marketplace` in, `itemsResult.items[].asin`/`errors[]` out). Batch size
+      (10 ASINs) and pacing (1 request/1.1s) are unchanged.
+    - **Caveat — verify before relying on specifics:** the official docs at
+      `affiliate-program.amazon.com/creatorsapi/docs/en-us/introduction`
+      returned HTTP 403 on every fetch attempt (gated behind an Associates
+      Central login), so the endpoint/auth shape above is corroborated across
+      three independent third-party sources (a client-library implementation,
+      a migration-guide blog post, and a dev.to post on the auth-layer change)
+      rather than read directly off Amazon's page. Two things noted by those
+      sources but *not* implemented, since they'd be speculative without the
+      primary doc: (a) a "v2.x" legacy Cognito-fronted token flow with a
+      different endpoint/request-encoding and an `Authorization: …, Version N`
+      header suffix — only the "v3.x" Login-with-Amazon flow (described as the
+      current default for newly-created credentials) is supported; (b) the
+      token endpoint host reportedly varies by account region
+      (`api.amazon.com` NA / `api.amazon.co.uk` EU / `api.amazon.co.jp` FE) —
+      exposed as an override (`CREATORSAPI_TOKEN_URL` env var / `tokenUrl`
+      engine option, default NA) rather than auto-detected. Re-verify against
+      your own Associates Central → Creators API credential page before
+      depending on either.
+    - Eligibility: Creators API access reportedly requires 10+ qualifying
+      Associates referral sales in the trailing 30 days (same third-party
+      sources; also unverified against the primary doc) — a brand-new
+      Associates account may see the token request fail (surfaced via
+      `onWarn`/exit code, same as any other auth failure) until that bar is
+      met. The HTTPS probe engine has no such requirement and remains usable
+      immediately.
+    - Updated alongside: `templates/worker/.github/workflows/check-listings.yml`
+      now runs `--engine creatorsapi` with the new secret names; root
+      `README.md`, `templates/worker/README.md`, and `docs/COMPLIANCE.md`
+      (§"No prices, ever") no longer say PA-API is the only sanctioned price
+      source.
   - Status (2026-07-19): the probe engine no longer trusts a bare HTTP 200 as
     proof of a live listing. `classifyOkResponse()` in `engines.ts` reads the
     response body for captcha/robot-check markers and checks whether the
@@ -655,12 +699,36 @@ This section is a differentiator — every DIY blog post hand-waves it.
 - GitHub Actions: lint (Biome) + typecheck + test on PR; release
   via changesets → npm (provenance enabled); template repo smoke-deploy job
   with `wrangler deploy --dry-run`. Lint+typecheck+test ✅ Done and template
-  smoke-deploy ✅ Done (both in `.github/workflows/ci.yml`); the
-  changesets → npm release workflow is ⬜ Not done — no `.changeset`
-  directory, no changesets dependency, no publish workflow exists yet (and
-  none of the publishable packages have a `repository` field yet, which npm
-  provenance requires — moot until a git remote exists). Status
-  (2026-07-19): a `template-copyout` job was added
+  smoke-deploy ✅ Done (both in `.github/workflows/ci.yml`). The
+  changesets → npm release workflow is now ✅ Done in-repo (2026-07-19):
+  `@changesets/cli` added as a root devDependency; `.changeset/config.json`
+  uses `fixed: [["@tagflow/core", "@tagflow/cloudflare", "@tagflow/cli"]]`
+  (lockstep versioning — `cli`/`cloudflare` both depend on `core` via
+  `workspace:*` and the three ship as one coherent library, so independent
+  versions would only confuse users) and `access: "public"`.
+  `.github/workflows/release.yml` runs `changesets/action@v1`: on push to
+  `main` it either opens/updates a "Version Packages" PR or, once that PR is
+  merged, builds and publishes via `npm publish` (changesets shells out to
+  `npm`, not `pnpm`, for the actual registry call regardless of the
+  workspace's package manager — sidesteps a pnpm 11 OIDC-publish bug
+  ([pnpm/pnpm#11513](https://github.com/pnpm/pnpm/issues/11513), fixed but
+  recent enough to avoid depending on). Auth is npm's OIDC **trusted
+  publishing** (`permissions: id-token: write`, `npm install -g npm@latest`
+  to guarantee ≥11.5.1) rather than a stored `NPM_TOKEN` — no long-lived
+  registry credential to rotate — plus `permissions: contents: write` /
+  `pull-requests: write` for the version-bump PR itself. Each package now has
+  `repository`/`homepage`/`bugs` pointing at
+  `github.com/zhuravlev-biz/tagflow` and `publishConfig: { access: "public",
+  provenance: true }` (scoped packages default to private without
+  `access: public`). **Not yet done — needs a one-time manual step outside
+  this repo before the first release can actually publish:** the GitHub repo
+  itself hasn't been created/pushed yet (no git remote configured locally),
+  and each of the three trusted-publisher entries must be configured on
+  npmjs.com (org/user + repo + workflow filename) after the repo exists —
+  npm's docs don't confirm whether trusted publishing covers a package's
+  very first publish or whether that one needs a manual `npm publish
+  --access public` first, so budget for either. Status (2026-07-19): a
+  `template-copyout` job was added
   (`.github/workflows/ci.yml`) that reproduces the documented user flow
   end-to-end — pack `core`/`cloudflare`/`cli` to tarballs, copy
   `templates/worker` out of the workspace, point its deps at the tarballs,
@@ -677,7 +745,7 @@ This section is a differentiator — every DIY blog post hand-waves it.
 | Version | Status | Scope |
 |---|---|---|
 | **v0.1** | ✅ Done | F1–F12, N1–N5; `core` + `cloudflare` + `cli init/validate/check`; standalone template + mounted Astro example; README + compliance doc. Ship when the mounted example runs on a real site. Exit criterion met — the Astro mounted example is built and runnable (`examples/astro-static-assets`). Remaining v0.1-adjacent gaps: the changesets release workflow (see §12) is not yet done but was not a v0.1 MUST; Workers-runtime tests via `vitest-pool-workers` and CLI snapshot tests are now ✅ Done (2026-07-19, see §12). Status (2026-07-19): the copied-out-template gap closed — `template-copyout` CI job + exact-pinned `templates/worker` deps (see §12) now prove the documented user flow works outside the workspace. |
-| **v0.2** | 🟡 Feature-complete (2026-07-19) | `stats` CLI + fallback-leak report ✅; A/B variants (F13) ✅; choice pages (F14) ✅. Remaining: migrate `check`'s API engine from PA-API to the Creators API (§10, §15 — PA-API's deprecation date has passed), and the release plumbing (changesets → npm) before anything can actually ship as 0.2.0. |
+| **v0.2** | 🟡 Both code blockers closed (2026-07-19) | `stats` CLI + fallback-leak report ✅; A/B variants (F13) ✅; choice pages (F14) ✅; `check` migrated from PA-API to the Creators API ✅ (§10, §15); changesets → npm release plumbing ✅ in-repo (§12). Remaining before 0.2.0 actually publishes: push the repo to `github.com/zhuravlev-biz/tagflow` and configure npm trusted publishing for each `@tagflow/*` package (one-time, outside this repo — see §12's "not yet done" note). |
 | **v0.3** | 🟡 Feature-complete (2026-07-19) | Non-Amazon destinations (F15) ✅; device routing (F16) ✅; earnings import (F17) ✅. Implemented alongside v0.2 — one config-schema change instead of two. |
 | **v1.0** | ⬜ Not started | API freeze, schema `v1` frozen, docs site. |
 | Post-1.0 (maybe) | ⬜ Not started | Read-only stats dashboard (static page over AE API, Sink-style); KV-backed config adapter for no-rebuild updates. |
@@ -721,12 +789,27 @@ keywords (`amazon-associates`, `affiliate`, `onelink-alternative`,
   Compliance"; URLgenius policy guide.
 - Amazon serves Portugal via amazon.es (no amazon.pt) — encoded in the
   country map.
-- **PA-API deprecation (verified live 2026-07-19):** Amazon's PA-API
+- **PA-API retirement (verified live 2026-07-19):** Amazon's PA-API
   documentation carries the notice "PA-API will be deprecated on May 15th,
-  2026. Please migrate to Creators API"
-  (`webservices.amazon.com/paapi5/documentation/faq.html`; Creators API docs:
-  `affiliate-program.amazon.com/creatorsapi/docs/en-us/introduction`). That
-  date has passed. `check`'s `--engine paapi` path (§10) is deprecated
-  upstream and may stop working; the HTTPS probe engine is unaffected and
-  remains the default; migrating to the Creators API is a v0.2 roadmap item
-  (§13).
+  2026. Please migrate to Creators API", plus "This documentation site is no
+  longer maintained, and contains outdated information"
+  (`webservices.amazon.com/paapi5/documentation/faq.html`). `check`'s
+  `--engine paapi` path is removed (§10); `--engine creatorsapi` is the
+  replacement.
+- **Creators API shape (unverified against the primary doc, 2026-07-19):**
+  `affiliate-program.amazon.com/creatorsapi/docs/en-us/introduction` returned
+  HTTP 403 on every fetch attempt (gated behind an Associates Central login).
+  The engine implementation (§10) is instead based on three independent
+  third-party sources that agree on: OAuth2 client-credentials auth
+  (`POST https://api.amazon.com/auth/o2/token`, bearer token, `scope=
+  creatorsapi::default`), a single global `GetItems` endpoint
+  (`POST https://creatorsapi.amazon/catalog/v1/getItems`) with the
+  marketplace signaled by an `x-marketplace` header instead of a
+  per-marketplace host, `lowerCamelCase` request/response bodies otherwise
+  shaped like PA-API's `GetItems`, a 10-ASIN batch cap, and a ~1 req/s rate
+  limit. Not corroborated by a primary source and treated as unverified: a
+  reported "v2.x" legacy Cognito auth variant with region-specific token
+  hosts (not implemented — only "v3.x" Login-with-Amazon is), and a reported
+  eligibility requirement of 10+ qualifying Associates sales in the trailing
+  30 days to use the API at all. Re-verify against your own Associates
+  Central → Creators API credential page before relying on specifics.

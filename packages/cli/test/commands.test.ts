@@ -184,7 +184,7 @@ describe('runCheck engine selection', () => {
   const savedEnv = new Map<string, string | undefined>()
 
   beforeEach(() => {
-    for (const key of ['PAAPI_ACCESS_KEY', 'PAAPI_SECRET_KEY']) {
+    for (const key of ['CREATORSAPI_CREDENTIAL_ID', 'CREATORSAPI_CREDENTIAL_SECRET']) {
       savedEnv.set(key, process.env[key])
       delete process.env[key]
     }
@@ -196,17 +196,17 @@ describe('runCheck engine selection', () => {
     }
   })
 
-  it('selects paapi when PAAPI_ACCESS_KEY and PAAPI_SECRET_KEY are set', async () => {
-    process.env['PAAPI_ACCESS_KEY'] = 'AKIDEXAMPLE'
-    process.env['PAAPI_SECRET_KEY'] = 'secret'
+  it('selects creatorsapi when CREATORSAPI_CREDENTIAL_ID and CREATORSAPI_CREDENTIAL_SECRET are set', async () => {
+    process.env['CREATORSAPI_CREDENTIAL_ID'] = 'amzn1.application-oa2-client.example'
+    process.env['CREATORSAPI_CREDENTIAL_SECRET'] = 'secret'
     const path = join(dir, 'affiliate.config.json')
     await writeFile(path, JSON.stringify(NO_PRODUCTS_CONFIG))
     expect(await runCheck([path])).toBe(0)
     const output = vi.mocked(console.log).mock.calls.flat().join('\n')
-    expect(output).toContain('"paapi" engine')
+    expect(output).toContain('"creatorsapi" engine')
   })
 
-  it('selects probe when no PA-API credentials are present', async () => {
+  it('selects probe when no Creators API credentials are present', async () => {
     const path = join(dir, 'affiliate.config.json')
     await writeFile(path, JSON.stringify(NO_PRODUCTS_CONFIG))
     expect(await runCheck([path])).toBe(0)
@@ -214,13 +214,22 @@ describe('runCheck engine selection', () => {
     expect(output).toContain('"probe" engine')
   })
 
-  it('errors when --engine paapi is explicitly requested without credentials', async () => {
+  it('errors when --engine creatorsapi is explicitly requested without credentials', async () => {
+    const path = join(dir, 'affiliate.config.json')
+    await writeFile(path, JSON.stringify(NO_PRODUCTS_CONFIG))
+    expect(await runCheck([path, '--engine', 'creatorsapi'])).toBe(1)
+    const output = vi.mocked(console.error).mock.calls.flat().join('\n')
+    expect(output).toContain('CREATORSAPI_CREDENTIAL_ID')
+    expect(output).toContain('CREATORSAPI_CREDENTIAL_SECRET')
+  })
+
+  it('errors with a migration hint when the retired --engine paapi is requested', async () => {
     const path = join(dir, 'affiliate.config.json')
     await writeFile(path, JSON.stringify(NO_PRODUCTS_CONFIG))
     expect(await runCheck([path, '--engine', 'paapi'])).toBe(1)
     const output = vi.mocked(console.error).mock.calls.flat().join('\n')
-    expect(output).toContain('PAAPI_ACCESS_KEY')
-    expect(output).toContain('PAAPI_SECRET_KEY')
+    expect(output).toContain('retired')
+    expect(output).toContain('creatorsapi')
   })
 
   it('errors on an unknown --engine name', async () => {

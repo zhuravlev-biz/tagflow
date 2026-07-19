@@ -15,10 +15,11 @@ Usage:
   tagflow validate [config-path]
       Validate the config; exit 1 on errors (CI-friendly).
 
-  tagflow check [config-path] [--engine probe|paapi] [--write] [--delay-ms <n>]
+  tagflow check [config-path] [--engine probe|creatorsapi] [--write] [--delay-ms <n>]
       Verify each product × tagged marketplace listing. Updates availableIn
       with --write. Exit 2 when a previously-available listing disappeared.
-      The paapi engine reads PAAPI_ACCESS_KEY / PAAPI_SECRET_KEY env vars.
+      The creatorsapi engine reads CREATORSAPI_CREDENTIAL_ID /
+      CREATORSAPI_CREDENTIAL_SECRET env vars.
 
   tagflow stats [--dataset <name>] [--days <n>] [--limit <n>] [--leaks]
       Click stats from Workers Analytics Engine; --leaks shows clicks that

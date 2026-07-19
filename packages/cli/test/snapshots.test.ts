@@ -15,8 +15,8 @@ import { runValidate } from '../src/commands/validate.js'
 // file complements rather than replaces.
 //
 // The check engine is always a hand-built fake (never `createProbeEngine` /
-// `createPaapiEngine`), so none of this ever touches the network — see the
-// `fakeEngine` helper below.
+// `createCreatorsApiEngine`), so none of this ever touches the network — see
+// the `fakeEngine` helper below.
 
 const FIXTURES_DIR = fileURLToPath(new URL('./fixtures/', import.meta.url))
 const fixture = (name: string): string => join(FIXTURES_DIR, name)

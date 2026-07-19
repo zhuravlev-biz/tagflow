@@ -3,6 +3,20 @@
   "version": "0.1.0",
   "description": "Pure resolution engine for localized Amazon affiliate links: config schema, country-to-marketplace map, deterministic fallback resolution.",
   "license": "MIT",
+  "author": "Alex Zhuravlev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhuravlev-biz/tagflow.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/zhuravlev-biz/tagflow#readme",
+  "bugs": {
+    "url": "https://github.com/zhuravlev-biz/tagflow/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "type": "module",
   "sideEffects": false,
   "engines": {

@@ -150,15 +150,18 @@ npx tagflow check      # verify every product × marketplace listing exists
 ```
 
 `check` is the revenue-leak monitor paid services charge for: it verifies
-each listing via PA-API (with your keys) or a rate-limited client-side HTTPS
-probe, updates `availableIn` with `--write`, and exits non-zero when a
-previously-available listing died. The template ships a weekly GitHub Action
-for it.
+each listing via the Creators API (with your credentials) or a rate-limited
+client-side HTTPS probe, updates `availableIn` with `--write`, and exits
+non-zero when a previously-available listing died. The template ships a
+weekly GitHub Action for it.
 
-> Note (2026-07-19): Amazon has deprecated PA-API in favor of the Creators
-> API (deprecation date has passed); `--engine paapi` may stop working
-> without notice. The HTTPS probe engine is unaffected and remains the
-> default. Migrating `check` to the Creators API is on the v0.2 roadmap.
+> Note (2026-07-19): PA-API was retired by Amazon on 2026-05-15; `check` now
+> talks to its successor, the Creators API, via `--engine creatorsapi`
+> (`CREATORSAPI_CREDENTIAL_ID`/`CREATORSAPI_CREDENTIAL_SECRET` env vars —
+> create these under Associates Central → Tools → Creators API). The old
+> `--engine paapi` is rejected with a pointer to the new flag. The HTTPS
+> probe engine is unaffected and remains the default when no credentials are
+> set.
 
 ## Analytics
 

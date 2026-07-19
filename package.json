@@ -2,6 +2,15 @@
   "name": "tagflow-monorepo",
   "private": true,
   "type": "module",
+  "author": "Alexey Zhuravlev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhuravlev-biz/tagflow.git"
+  },
+  "homepage": "https://github.com/zhuravlev-biz/tagflow#readme",
+  "bugs": {
+    "url": "https://github.com/zhuravlev-biz/tagflow/issues"
+  },
   "packageManager": "pnpm@11.1.2",
   "engines": {
     "node": ">=20"
@@ -10,10 +19,14 @@
     "build": "pnpm -r --filter './packages/*' run build",
     "test": "pnpm -r --filter './packages/*' run test",
     "typecheck": "pnpm -r run typecheck",
-    "lint": "biome lint ."
+    "lint": "biome lint .",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "pnpm build && changeset publish"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",
+    "@changesets/cli": "2.31.1",
     "@vitest/coverage-v8": "4.1.10",
     "typescript": "7.0.2",
     "vitest": "4.1.10"

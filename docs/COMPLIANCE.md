@@ -39,9 +39,10 @@ router routes clicks; it cannot create payouts.
 
 ## No prices, ever
 
-Displaying prices fetched outside the Product Advertising API (or displaying
-stale PA-API prices) violates the Operating Agreement. TagFlow never
-displays prices and never will — deliberately out of scope, not deferred.
+Displaying prices fetched outside Amazon's official product APIs (PA-API's
+successor, the Creators API — or displaying stale prices from either)
+violates the Operating Agreement. TagFlow never displays prices and never
+will — deliberately out of scope, not deferred.
 
 ## Affiliate disclosure
 

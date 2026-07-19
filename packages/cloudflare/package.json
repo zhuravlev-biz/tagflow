@@ -3,6 +3,20 @@
   "version": "0.1.0",
   "description": "Cloudflare Worker adapter for localized Amazon affiliate links: mountable handler, 302 semantics, optional Analytics Engine click logging.",
   "license": "MIT",
+  "author": "Alex Zhuravlev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhuravlev-biz/tagflow.git",
+    "directory": "packages/cloudflare"
+  },
+  "homepage": "https://github.com/zhuravlev-biz/tagflow#readme",
+  "bugs": {
+    "url": "https://github.com/zhuravlev-biz/tagflow/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "type": "module",
   "sideEffects": false,
   "engines": {

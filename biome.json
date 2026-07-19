@@ -6,7 +6,7 @@
 		"useIgnoreFile": true
 	},
 	"files": {
-		"includes": ["**", "!**/.astro", "!**/*.astro"]
+		"includes": ["**", "!**/.astro", "!**/*.astro", "!**/test/fixtures"]
 	},
 	"formatter": {
 		"enabled": false

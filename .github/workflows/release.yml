@@ -1,0 +1,51 @@
+# Publishes @tagflow/core, @tagflow/cloudflare and @tagflow/cli (kept in
+# lockstep — see .changeset/config.json's `fixed` group). On every push to
+# main, changesets/action either opens/updates a "Version Packages" PR (if
+# there are unreleased changesets) or, once that PR is merged, builds and
+# publishes to npm.
+#
+# Auth is npm's OIDC trusted publishing, not a stored NPM_TOKEN — nothing
+# here is a long-lived secret. This requires a one-time setup outside this
+# repo before it can actually publish: push this repo to
+# github.com/zhuravlev-biz/tagflow, then configure a trusted publisher for
+# each of the three packages on npmjs.com (org/user zhuravlev-biz, repo
+# tagflow, workflow file release.yml). See docs/DESIGN.md §12 for the
+# open question of whether that also covers each package's very first
+# publish, or whether that one needs a manual `npm publish --access public`.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Trusted publishing needs npm CLI >=11.5.1; pin to latest rather than
+      # whatever setup-node's bundled npm happens to be.
+      - run: npm install -g npm@latest
+      - name: create Version Packages PR, or publish if one was just merged
+        uses: changesets/action@v1
+        with:
+          version: pnpm run version-packages
+          publish: pnpm release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

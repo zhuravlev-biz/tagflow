@@ -2,16 +2,12 @@
 # doc). Fails the run — and can notify you — when a previously-available
 # listing disappears, i.e. when clicks would start leaking to fallbacks.
 #
-# By default this uses the PA-API engine, which requires PAAPI_ACCESS_KEY and
-# PAAPI_SECRET_KEY repository secrets. The plain HTTPS probe engine is NOT
-# suitable here: it must run from your own machine and IP, never from CI or
-# datacenter infrastructure.
-#
-# Heads-up (2026-07): Amazon has deprecated PA-API in favor of the Creators
-# API, so this engine may stop working without notice — checks then report
-# "unverified" rather than failing spuriously. A Creators API engine is on
-# the tagflow roadmap; watch its releases and update the flag here when it
-# lands.
+# By default this uses the Creators API engine (PA-API's successor — PA-API
+# itself was retired by Amazon on 2026-05-15), which requires
+# CREATORSAPI_CREDENTIAL_ID and CREATORSAPI_CREDENTIAL_SECRET repository
+# secrets from Associates Central → Tools → Creators API. The plain HTTPS
+# probe engine is NOT suitable here: it must run from your own machine and
+# IP, never from CI or datacenter infrastructure.
 name: check-listings
 
 on:
@@ -33,7 +29,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: npx tagflow validate
-      - run: npx tagflow check --engine paapi
+      - run: npx tagflow check --engine creatorsapi
         env:
-          PAAPI_ACCESS_KEY: ${{ secrets.PAAPI_ACCESS_KEY }}
-          PAAPI_SECRET_KEY: ${{ secrets.PAAPI_SECRET_KEY }}
+          CREATORSAPI_CREDENTIAL_ID: ${{ secrets.CREATORSAPI_CREDENTIAL_ID }}
+          CREATORSAPI_CREDENTIAL_SECRET: ${{ secrets.CREATORSAPI_CREDENTIAL_SECRET }}

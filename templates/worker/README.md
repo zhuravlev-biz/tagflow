@@ -33,9 +33,9 @@ per-marketplace affiliate tag. Runs entirely on the Cloudflare free plan.
 ## Weekly availability checks
 
 `.github/workflows/check-listings.yml` runs `tagflow check` every Monday and
-fails when a previously-available listing disappears. Add `PAAPI_ACCESS_KEY`
-and `PAAPI_SECRET_KEY` repository secrets (PA-API keys from Associates
-Central) to enable it.
+fails when a previously-available listing disappears. Add
+`CREATORSAPI_CREDENTIAL_ID` and `CREATORSAPI_CREDENTIAL_SECRET` repository
+secrets (from Associates Central → Tools → Creators API) to enable it.
 
 ## Analytics
 
