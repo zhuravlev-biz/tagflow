@@ -729,19 +729,20 @@ This section is a differentiator — every DIY blog post hand-waves it.
   before a trusted publisher can be configured for it
   ([npm/cli#8544](https://github.com/npm/cli/issues/8544), confirmed live by
   run 29692912859's "No NPM_TOKEN found, but OIDC is available" followed by
-  E404 on all three packages). **Remaining one-time steps, in order:**
-  (1) create the `tagflow` org on npmjs.com to claim the `@tagflow` scope
-  (org didn't exist as of 2026-07-19; whether the bare name is squatted by a
-  user account couldn't be probed anonymously); (2) `npm login` locally and
-  publish 0.2.0 of all three packages manually, with provenance forced off
-  since it only works from CI OIDC (`npm_config_provenance=false pnpm -r
-  --filter './packages/*' publish --access public --no-git-checks`), then
-  `pnpm changeset tag && git push --tags`; (3) on npmjs.com, for each of the
-  three packages: Settings → Trusted publisher → GitHub Actions, org
-  `zhuravlev-biz`, repo `tagflow`, workflow `release.yml`, no environment
-  (post-2026-05-20 configs must also explicitly tick the "publish" allowed
-  action). From then on the changesets PR → merge → publish loop is fully
-  automatic with provenance. Status (2026-07-19): a
+  E404 on all three packages). **One-time bootstrap, status 2026-07-19:**
+  (1) ✅ the `tagflow` org was created on npmjs.com, claiming the `@tagflow`
+  scope; (2) ✅ 0.2.0 of all three packages was published manually
+  (provenance forced off — it only works from CI OIDC:
+  `npm_config_provenance=false pnpm -r --filter './packages/*' publish
+  --access public --no-git-checks`), `changeset tag` tags pushed, and the
+  published artifacts verified from a clean consumer install: `workspace:*`
+  rewritten to `0.2.0` in both dependents' tarballs, `tagflow` bin runs,
+  `core`/`cloudflare` import with expected exports; (3) ⬜ on npmjs.com, for
+  each of the three packages: Settings → Trusted publisher → GitHub Actions,
+  org `zhuravlev-biz`, repo `tagflow`, workflow `release.yml`, no
+  environment (post-2026-05-20 configs must also explicitly tick the
+  "publish" allowed action). Once (3) is done, the changesets PR → merge →
+  publish loop is fully automatic with provenance. Status (2026-07-19): a
   `template-copyout` job was added
   (`.github/workflows/ci.yml`) that reproduces the documented user flow
   end-to-end — pack `core`/`cloudflare`/`cli` to tarballs, copy
