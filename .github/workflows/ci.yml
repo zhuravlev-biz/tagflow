@@ -63,14 +63,19 @@ jobs:
           find /tmp/tagflow-copyout -name '*.tsbuildinfo' -delete
       - name: point the standalone copy at the packed tarballs instead of the registry
         working-directory: /tmp/tagflow-copyout
+        # Resolve the tarball names instead of hardcoding versions, so a
+        # version bump can't silently break this job.
         run: |
-          npm pkg set "dependencies.@tagflow/cloudflare=file:/tmp/tagflow-tgz/tagflow-cloudflare-0.1.0.tgz"
-          npm pkg set "devDependencies.@tagflow/cli=file:/tmp/tagflow-tgz/tagflow-cli-0.1.0.tgz"
-          cat > pnpm-workspace.yaml <<'EOF'
+          CORE_TGZ=$(ls /tmp/tagflow-tgz/tagflow-core-*.tgz)
+          CLOUDFLARE_TGZ=$(ls /tmp/tagflow-tgz/tagflow-cloudflare-*.tgz)
+          CLI_TGZ=$(ls /tmp/tagflow-tgz/tagflow-cli-*.tgz)
+          npm pkg set "dependencies.@tagflow/cloudflare=file:$CLOUDFLARE_TGZ"
+          npm pkg set "devDependencies.@tagflow/cli=file:$CLI_TGZ"
+          cat > pnpm-workspace.yaml <<EOF
           packages:
             - "."
           overrides:
-            "@tagflow/core": "file:/tmp/tagflow-tgz/tagflow-core-0.1.0.tgz"
+            "@tagflow/core": "file:$CORE_TGZ"
           allowBuilds:
             esbuild: true
             sharp: true
