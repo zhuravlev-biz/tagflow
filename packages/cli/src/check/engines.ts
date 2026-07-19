@@ -13,9 +13,37 @@ export interface EngineIo {
   readonly fetchFn?: typeof fetch
   readonly sleep?: (ms: number) => Promise<void>
   readonly random?: () => number
+  /**
+   * Called with a concise, credential-free diagnostic whenever a check can't
+   * get a definitive answer (network error, non-200 response, bad
+   * credentials, …) so the cause isn't silently indistinguishable from a
+   * normal "unknown". Must never receive secrets or signed headers.
+   */
+  readonly onWarn?: (message: string) => void
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** Amazon serves these on captcha/robot-check interstitials — always with HTTP 200. */
+const ROBOT_CHECK_MARKERS = ['captcha', 'api-services-support@amazon.com']
+
+/**
+ * A 200 status alone doesn't mean the listing is real: Amazon serves
+ * captcha/robot-check pages and redirects dead ASINs to the storefront or a
+ * search page, both with HTTP 200. Read the body and the final URL to catch
+ * those cases conservatively (falling back to 'unknown', never 'missing',
+ * since we genuinely can't tell).
+ */
+async function classifyOkResponse(response: Response, asin: string): Promise<ListingStatus> {
+  const body = await response.text()
+  const lower = body.toLowerCase()
+  if (ROBOT_CHECK_MARKERS.some((marker) => lower.includes(marker))) return 'unknown'
+  // Canonical product pages keep the ASIN in the path (/dp/<ASIN>); a
+  // redirect away from it (e.g. to the storefront/search) means the listing
+  // is gone. An empty url (some fetch mocks don't populate it) passes.
+  if (response.url !== '' && !response.url.includes(asin)) return 'unknown'
+  return 'ok'
+}
 
 /**
  * Plain HTTPS probe of the public `/dp/` page (§10). Runs client-side from
@@ -29,6 +57,7 @@ export function createProbeEngine(options: { delayMs?: number } & EngineIo = {})
   const sleep = options.sleep ?? defaultSleep
   const random = options.random ?? Math.random
   const delayMs = options.delayMs ?? 2000
+  const onWarn = options.onWarn
 
   return {
     name: 'probe',
@@ -49,12 +78,17 @@ export function createProbeEngine(options: { delayMs?: number } & EngineIo = {})
               },
             },
           )
-          if (response.status === 200) results.set(asin, 'ok')
-          else if (response.status === 404 || response.status === 410) results.set(asin, 'missing')
-          else results.set(asin, 'unknown')
-          // Response bodies are irrelevant; make sure connections are freed.
-          await response.body?.cancel()
-        } catch {
+          if (response.status === 404 || response.status === 410) {
+            results.set(asin, 'missing')
+            await response.body?.cancel()
+          } else if (response.status === 200) {
+            results.set(asin, await classifyOkResponse(response, asin))
+          } else {
+            results.set(asin, 'unknown')
+            await response.body?.cancel()
+          }
+        } catch (error) {
+          onWarn?.(`probe ${marketplace}/${asin}: ${(error as Error).message}`)
           results.set(asin, 'unknown')
         }
       }
@@ -114,6 +148,7 @@ export function createPaapiEngine(
   const sleep = options.sleep ?? defaultSleep
   const delayMs = options.delayMs ?? 1100
   const now = options.now ?? (() => new Date())
+  const onWarn = options.onWarn
 
   return {
     name: 'paapi',
@@ -135,7 +170,8 @@ export function createPaapiEngine(
           PartnerTag: partnerTag,
           PartnerType: 'Associates',
           Marketplace: AMAZON_DOMAINS[marketplace],
-          Resources: [],
+          // Resources omitted: PA-API defaults to ["ItemInfo.Title"], which
+          // is all we need to confirm the ASIN resolves to a live item.
         })
         const path = '/paapi5/getitems'
         const headers = signRequest({
@@ -163,6 +199,7 @@ export function createPaapiEngine(
           })
           if (response.status !== 200 && response.status !== 404) {
             // Auth/throttle problems affect the whole batch.
+            onWarn?.(`paapi ${marketplace}: HTTP ${response.status}`)
             for (const asin of batch) results.set(asin, 'unknown')
             continue
           }
@@ -177,7 +214,8 @@ export function createPaapiEngine(
             // from ItemsResult — both mean the listing is dead for linking.
             results.set(asin, found.has(asin) ? 'ok' : 'missing')
           }
-        } catch {
+        } catch (error) {
+          onWarn?.(`paapi ${marketplace}: ${(error as Error).message}`)
           for (const asin of batch) results.set(asin, 'unknown')
         }
       }

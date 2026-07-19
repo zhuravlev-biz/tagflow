@@ -155,6 +155,11 @@ probe, updates `availableIn` with `--write`, and exits non-zero when a
 previously-available listing died. The template ships a weekly GitHub Action
 for it.
 
+> Note (2026-07-19): Amazon has deprecated PA-API in favor of the Creators
+> API (deprecation date has passed); `--engine paapi` may stop working
+> without notice. The HTTPS probe engine is unaffected and remains the
+> default. Migrating `check` to the Creators API is on the v0.2 roadmap.
+
 ## Analytics
 
 One Analytics Engine data point per click — `country`, `marketplace`,

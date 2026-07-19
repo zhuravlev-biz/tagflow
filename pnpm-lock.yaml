@@ -106,14 +106,14 @@ importers:
   templates/worker:
     dependencies:
       '@tagflow/cloudflare':
-        specifier: workspace:*
+        specifier: 0.1.0
         version: link:../../packages/cloudflare
     devDependencies:
       '@cloudflare/workers-types':
         specifier: 5.20260711.1
         version: 5.20260711.1
       '@tagflow/cli':
-        specifier: workspace:*
+        specifier: 0.1.0
         version: link:../../packages/cli
       typescript:
         specifier: 7.0.2

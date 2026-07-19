@@ -14,6 +14,13 @@ export interface ProductConfig {
   readonly availableIn?: readonly MarketplaceId[]
 }
 
+/**
+ * The "never emit an untagged URL" guarantee (F2) is enforced by
+ * `parseConfig` (it rejects a default marketplace with no tag) — it is not a
+ * property of this type. A hand-built `Config` that bypasses `parseConfig`
+ * can violate it, in which case `resolve()` degrades to an empty tag rather
+ * than throwing.
+ */
 export interface Config {
   readonly defaultMarketplace: MarketplaceId
   readonly tags: Readonly<Partial<Record<MarketplaceId, string>>>
@@ -159,7 +166,11 @@ export function parseConfig(input: unknown): ParseConfigResult {
     }
     // Reject cycles (a → b, b → a). Resolution only ever takes one fallback
     // hop, but a cyclic config is always a mistake worth failing loudly on.
+    // `reported` tracks every node already accounted for by a reported cycle
+    // so a 2-cycle like {de: 'fr', fr: 'de'} is flagged once, not twice.
+    const reported = new Set<MarketplaceId>()
     for (const start of Object.keys(marketplaceFallbacks) as MarketplaceId[]) {
+      if (reported.has(start)) continue
       const seen = new Set<MarketplaceId>([start])
       let current = marketplaceFallbacks[start]
       while (current !== undefined) {
@@ -168,6 +179,7 @@ export function parseConfig(input: unknown): ParseConfigResult {
             `marketplaceFallbacks.${start}`,
             `fallback chain starting at "${start}" is cyclic`,
           )
+          for (const node of seen) reported.add(node)
           break
         }
         seen.add(current)

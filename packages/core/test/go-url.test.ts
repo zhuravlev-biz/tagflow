@@ -20,6 +20,15 @@ describe('goUrl', () => {
   it('percent-encodes the product key', () => {
     expect(goUrl('a b')).toBe('/go/a%20b')
   })
+
+  it('throws a TypeError on an empty product key', () => {
+    expect(() => goUrl('')).toThrow(TypeError)
+  })
+
+  it('throws a TypeError on a reserved product key, case-insensitively', () => {
+    expect(() => goUrl('amazon')).toThrow(TypeError)
+    expect(() => goUrl('AMAZON')).toThrow(TypeError)
+  })
 })
 
 describe('goAmazonUrl', () => {
@@ -28,5 +37,9 @@ describe('goAmazonUrl', () => {
     expect(goAmazonUrl('B0XXXXXXXX', { base: 'https://example.com', prefix: '/out' })).toBe(
       'https://example.com/out/amazon/B0XXXXXXXX',
     )
+  })
+
+  it('throws a TypeError on an empty asin', () => {
+    expect(() => goAmazonUrl('')).toThrow(TypeError)
   })
 })

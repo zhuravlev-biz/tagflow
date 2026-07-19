@@ -86,6 +86,11 @@ describe('parseConfig', () => {
     expect(errors.some((e) => e.includes('cyclic'))).toBe(true)
   })
 
+  it('reports a 2-cycle once, not once per member', () => {
+    const errors = errorsOf({ ...VALID, marketplaceFallbacks: { de: 'fr', fr: 'de' } })
+    expect(errors.filter((e) => e.includes('cyclic'))).toHaveLength(1)
+  })
+
   it('rejects malformed country override keys, warns on unassigned ISO codes', () => {
     expect(errorsOf({ ...VALID, countryOverrides: { ch: 'de' } })[0]).toContain('uppercase')
     const result = parseConfig({ ...VALID, countryOverrides: { ZZ: 'de' } })
@@ -106,6 +111,37 @@ describe('parseConfig', () => {
 
   it('rejects a bad unknownAsin policy', () => {
     expect(errorsOf({ ...VALID, unknownAsin: 'search' })[0]).toContain('unknownAsin')
+  })
+
+  it('rejects a non-string or empty asinByMarketplace override', () => {
+    expect(
+      errorsOf({
+        ...VALID,
+        products: { p: { asin: 'B0XXXXXXXX', asinByMarketplace: { de: '' } } },
+      })[0],
+    ).toContain('must be a non-empty string')
+    expect(
+      errorsOf({
+        ...VALID,
+        products: { p: { asin: 'B0XXXXXXXX', asinByMarketplace: { de: 42 } } },
+      })[0],
+    ).toContain('must be a non-empty string')
+  })
+
+  it('warns on an asinByMarketplace override that does not look like an ASIN', () => {
+    const result = parseConfig({
+      ...VALID,
+      products: { p: { asin: 'B0XXXXXXXX', asinByMarketplace: { de: 'not-an-asin!' } } },
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.warnings.some((w) => w.path === 'products.p.asinByMarketplace.de')).toBe(true)
+  })
+
+  it('rejects a non-array availableIn', () => {
+    expect(
+      errorsOf({ ...VALID, products: { p: { asin: 'B0XXXXXXXX', availableIn: 'es' } } })[0],
+    ).toContain('must be an array of marketplace ids')
   })
 
   it('warns (not errors) on atypical tag and ASIN shapes', () => {

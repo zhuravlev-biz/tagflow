@@ -50,6 +50,11 @@ function taggedUrl(marketplace: MarketplaceId, asin: string, tag: string): strin
  * Pure, total resolution: same input → same output, never throws, and for
  * any known product always terminates on a tagged URL (the default
  * marketplace is validated at config-load time to carry a tag).
+ *
+ * The "never emit an untagged URL" guarantee (F2) is a `parseConfig`
+ * contract, not something the `Config` type enforces: `resolve()` degrades
+ * to an empty tag (see `redirectDecision`/`resolveRawAsin`) only for
+ * hand-built `Config` values that bypass `parseConfig`'s validation.
  */
 export function resolve(ctx: ClickContext, config: Config): Decision {
   const segments = ctx.path.split('/').filter((s) => s.length > 0)
@@ -67,6 +72,18 @@ export function resolve(ctx: ClickContext, config: Config): Decision {
   }
 
   return NOT_FOUND
+}
+
+/**
+ * Candidate → configured fallback → default; ≤3 entries by construction.
+ * Shared by curated and raw-ASIN resolution — the walk order is identical.
+ */
+function fallbackChain(candidate: MarketplaceId, config: Config): MarketplaceId[] {
+  const chain: MarketplaceId[] = [candidate]
+  const fallback = config.marketplaceFallbacks[candidate]
+  if (fallback !== undefined && fallback !== candidate) chain.push(fallback)
+  if (!chain.includes(config.defaultMarketplace)) chain.push(config.defaultMarketplace)
+  return chain
 }
 
 /**
@@ -107,11 +124,7 @@ function resolveCurated(
     return undefined
   }
 
-  // Walk candidate → configured fallback → default; ≤3 hops by construction.
-  const chain: MarketplaceId[] = [candidate]
-  const fallback = config.marketplaceFallbacks[candidate]
-  if (fallback !== undefined && fallback !== candidate) chain.push(fallback)
-  if (!chain.includes(config.defaultMarketplace)) chain.push(config.defaultMarketplace)
+  const chain = fallbackChain(candidate, config)
 
   let firstFailure: 'no-tag' | 'unavailable' | undefined
   for (const marketplace of chain) {
@@ -167,10 +180,7 @@ function resolveRawAsin(
     // Geo chain with the tag gate only — availability is unknown by
     // definition, so it cannot gate (F6).
     const { marketplace: candidate } = candidateForCountry(country, config)
-    const chain: MarketplaceId[] = [candidate]
-    const fallback = config.marketplaceFallbacks[candidate]
-    if (fallback !== undefined && fallback !== candidate) chain.push(fallback)
-    if (!chain.includes(config.defaultMarketplace)) chain.push(config.defaultMarketplace)
+    const chain = fallbackChain(candidate, config)
     marketplace = chain.find((m) => config.tags[m] !== undefined) ?? config.defaultMarketplace
   } else {
     marketplace = config.defaultMarketplace

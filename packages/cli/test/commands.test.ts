@@ -54,7 +54,10 @@ describe('validate command', () => {
   })
 
   it('exits 1 for a missing file', async () => {
-    expect(await runValidate([join(dir, 'nope.json')])).toBe(1)
+    const path = join(dir, 'nope.json')
+    expect(await runValidate([path])).toBe(1)
+    const output = vi.mocked(console.error).mock.calls.flat().join('\n')
+    expect(output).toContain(`config file not found: ${path}`)
   })
 })
 
@@ -77,6 +80,16 @@ describe('init command', () => {
   it('rejects an invalid default marketplace tag pairing', async () => {
     const path = join(dir, 'affiliate.config.json')
     expect(await runInit(['--out', path, '--default', 'es', '--tag', 'de=x-21'])).toBe(1)
+  })
+
+  it('errors instead of hanging when input is missing and stdin is not a TTY', async () => {
+    expect(process.stdin.isTTY).toBeFalsy() // sanity: this is what makes runInit take the non-interactive path
+    const path = join(dir, 'affiliate.config.json')
+    const code = await runInit(['--out', path])
+    expect(code).toBe(1)
+    const output = vi.mocked(console.error).mock.calls.flat().join('\n')
+    expect(output).toContain('--default')
+    expect(output).toContain('--tag')
   })
 })
 
@@ -158,5 +171,63 @@ describe('check command', () => {
     const path = join(dir, 'affiliate.config.json')
     await writeFile(path, '{not json')
     expect(await runCheck([path], fakeEngine({}))).toBe(1)
+  })
+})
+
+// selectEngine() is internal to commands/check.ts, so it's exercised here
+// through runCheck's own engine-selection logic (no engineOverride). Using a
+// config with no products means the engine is picked, its name printed, and
+// then runCheck returns before ever calling engine.check() — so these tests
+// never make a real network request.
+describe('runCheck engine selection', () => {
+  const NO_PRODUCTS_CONFIG = { ...VALID_CONFIG, products: {} }
+  const savedEnv = new Map<string, string | undefined>()
+
+  beforeEach(() => {
+    for (const key of ['PAAPI_ACCESS_KEY', 'PAAPI_SECRET_KEY']) {
+      savedEnv.set(key, process.env[key])
+      delete process.env[key]
+    }
+  })
+  afterEach(() => {
+    for (const [key, value] of savedEnv) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  })
+
+  it('selects paapi when PAAPI_ACCESS_KEY and PAAPI_SECRET_KEY are set', async () => {
+    process.env['PAAPI_ACCESS_KEY'] = 'AKIDEXAMPLE'
+    process.env['PAAPI_SECRET_KEY'] = 'secret'
+    const path = join(dir, 'affiliate.config.json')
+    await writeFile(path, JSON.stringify(NO_PRODUCTS_CONFIG))
+    expect(await runCheck([path])).toBe(0)
+    const output = vi.mocked(console.log).mock.calls.flat().join('\n')
+    expect(output).toContain('"paapi" engine')
+  })
+
+  it('selects probe when no PA-API credentials are present', async () => {
+    const path = join(dir, 'affiliate.config.json')
+    await writeFile(path, JSON.stringify(NO_PRODUCTS_CONFIG))
+    expect(await runCheck([path])).toBe(0)
+    const output = vi.mocked(console.log).mock.calls.flat().join('\n')
+    expect(output).toContain('"probe" engine')
+  })
+
+  it('errors when --engine paapi is explicitly requested without credentials', async () => {
+    const path = join(dir, 'affiliate.config.json')
+    await writeFile(path, JSON.stringify(NO_PRODUCTS_CONFIG))
+    expect(await runCheck([path, '--engine', 'paapi'])).toBe(1)
+    const output = vi.mocked(console.error).mock.calls.flat().join('\n')
+    expect(output).toContain('PAAPI_ACCESS_KEY')
+    expect(output).toContain('PAAPI_SECRET_KEY')
+  })
+
+  it('errors on an unknown --engine name', async () => {
+    const path = join(dir, 'affiliate.config.json')
+    await writeFile(path, JSON.stringify(NO_PRODUCTS_CONFIG))
+    expect(await runCheck([path, '--engine', 'bogus'])).toBe(1)
+    const output = vi.mocked(console.error).mock.calls.flat().join('\n')
+    expect(output).toContain('unknown engine "bogus"')
   })
 })

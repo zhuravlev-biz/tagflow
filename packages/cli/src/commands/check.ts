@@ -159,8 +159,9 @@ function selectEngine(
   const secretKey = env['PAAPI_SECRET_KEY']
   const chosen = engineName ?? (accessKey !== undefined && secretKey !== undefined ? 'paapi' : 'probe')
   const delayOption = delayMs === undefined ? {} : { delayMs }
+  const onWarn = (message: string): void => console.error(`  warning: ${message}`)
 
-  if (chosen === 'probe') return createProbeEngine(delayOption)
+  if (chosen === 'probe') return createProbeEngine({ ...delayOption, onWarn })
   if (chosen === 'paapi') {
     if (accessKey === undefined || secretKey === undefined) {
       console.error('✗ the paapi engine needs PAAPI_ACCESS_KEY and PAAPI_SECRET_KEY env vars')
@@ -172,7 +173,7 @@ function selectEngine(
         secretKey,
         partnerTagFor: (marketplace) => config.tags[marketplace],
       },
-      delayOption,
+      { ...delayOption, onWarn },
     )
   }
   console.error(`✗ unknown engine "${chosen}" (expected "probe" or "paapi")`)

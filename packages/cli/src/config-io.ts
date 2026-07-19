@@ -1,4 +1,5 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { pid } from 'node:process'
 import { parseConfig, type Config, type ValidationIssue } from '@tagflow/core'
 
 export interface LoadedConfig {
@@ -25,8 +26,12 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
   let text: string
   try {
     text = await readFile(path, 'utf8')
-  } catch {
-    throw new ConfigError(`cannot read config file: ${path}`)
+  } catch (error) {
+    const nodeError = error as NodeJS.ErrnoException
+    if (nodeError.code === 'ENOENT') {
+      throw new ConfigError(`config file not found: ${path}`)
+    }
+    throw new ConfigError(`cannot read config file: ${path} (${nodeError.message})`)
   }
   let raw: unknown
   try {
@@ -50,7 +55,16 @@ export async function writeConfigFile(
   path: string,
   raw: Record<string, unknown>,
 ): Promise<void> {
-  await writeFile(path, `${JSON.stringify(raw, null, 2)}\n`, 'utf8')
+  // Write to a temp file in the same directory, then rename over the target,
+  // so a crash mid-write can never leave a truncated/corrupt config on disk.
+  const tmpPath = `${path}.${pid}.tmp`
+  try {
+    await writeFile(tmpPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf8')
+    await rename(tmpPath, path)
+  } catch (error) {
+    await unlink(tmpPath).catch(() => undefined)
+    throw error
+  }
 }
 
 export function printIssues(issues: readonly ValidationIssue[], kind: 'error' | 'warning'): void {

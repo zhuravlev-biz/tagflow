@@ -1,3 +1,4 @@
+import { parseConfig } from '@tagflow/core'
 import { describe, expect, it, vi } from 'vitest'
 import {
   classifyUserAgent,
@@ -20,10 +21,12 @@ const DESKTOP_UA =
 interface RequestInit2 {
   country?: string | undefined
   userAgent?: string | undefined
+  method?: string | undefined
 }
 
 function makeRequest(url: string, init: RequestInit2 = {}): Request {
   const request = new Request(url, {
+    ...(init.method === undefined ? {} : { method: init.method }),
     headers: init.userAgent === undefined ? {} : { 'user-agent': init.userAgent },
   })
   if (init.country !== undefined) {
@@ -46,6 +49,40 @@ describe('createAffiliateHandler', () => {
   it('throws at startup on an invalid config', () => {
     expect(() => createAffiliateHandler({ defaultMarketplace: 'nope' })).toThrow(
       /invalid affiliate config/,
+    )
+  })
+
+  it('throws on raw JSON in the documented schema shape whose defaultMarketplace has no tag', () => {
+    // Same top-level keys (countryOverrides/marketplaceFallbacks/unknownAsin)
+    // as a parseConfig() result, but `es` — the default marketplace — has no
+    // tag. Must still be rejected, not silently accepted as "already parsed".
+    expect(() =>
+      createAffiliateHandler({
+        defaultMarketplace: 'es',
+        tags: { de: 'tag-de-21' },
+        countryOverrides: {},
+        marketplaceFallbacks: {},
+        unknownAsin: 'default',
+        products: {
+          widget: { asin: 'B000000001', availableIn: ['es', 'de'] },
+        },
+      }),
+    ).toThrow(/invalid affiliate config/)
+  })
+
+  it('accepts an already-parsed Config', async () => {
+    const result = parseConfig(CONFIG)
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('unreachable')
+    const handler = createAffiliateHandler(result.config)
+    const response = await handler(
+      makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
+      {},
+      makeCtx(),
+    )
+    expect(response?.status).toBe(302)
+    expect(response?.headers.get('location')).toBe(
+      'https://www.amazon.de/dp/B000000001?tag=tag-de-21',
     )
   })
 
@@ -133,6 +170,45 @@ describe('createAffiliateHandler', () => {
       doubles: [1],
       indexes: ['widget'],
     })
+  })
+
+  it('normalizes a lowercase cf.country to uppercase before logging and resolving', async () => {
+    const handler = createAffiliateHandler(CONFIG)
+    const writeDataPoint = vi.fn()
+    const ctx = makeCtx()
+    const response = await handler(
+      makeRequest('https://site.example/go/widget', { country: 'de', userAgent: DESKTOP_UA }),
+      { CLICKS: { writeDataPoint } },
+      ctx,
+    )
+    expect(response?.headers.get('location')).toBe(
+      'https://www.amazon.de/dp/B000000001?tag=tag-de-21',
+    )
+    await Promise.all(ctx.promises)
+    expect(writeDataPoint.mock.calls[0]?.[0].blobs?.[0]).toBe('DE')
+  })
+
+  it('returns the 302 for a HEAD request but does not log a click', async () => {
+    const handler = createAffiliateHandler(CONFIG)
+    const writeDataPoint = vi.fn()
+    const ctx = makeCtx()
+    const response = await handler(
+      makeRequest('https://site.example/go/widget', {
+        method: 'HEAD',
+        country: 'DE',
+        userAgent: DESKTOP_UA,
+      }),
+      { CLICKS: { writeDataPoint } },
+      ctx,
+    )
+    expect(response?.status).toBe(302)
+    expect(response?.headers.get('location')).toBe(
+      'https://www.amazon.de/dp/B000000001?tag=tag-de-21',
+    )
+    expect(response?.headers.get('cache-control')).toBe('no-store')
+    expect(response?.headers.get('x-robots-tag')).toBe('noindex')
+    expect(ctx.promises).toHaveLength(0)
+    expect(writeDataPoint).not.toHaveBeenCalled()
   })
 
   it('honours a custom analytics binding name', async () => {

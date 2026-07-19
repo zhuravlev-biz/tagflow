@@ -59,6 +59,13 @@ export async function runInit(argv: string[]): Promise<number> {
 
   // Anything not provided via flags is asked interactively.
   if (defaultMarketplace === undefined || Object.keys(tags).length === 0) {
+    if (!stdin.isTTY) {
+      console.error(
+        '✗ missing --default and/or --tag, and stdin is not a terminal to prompt for them',
+      )
+      console.error('  pass them as flags, e.g.: tagflow init --default com --tag com=yourtag-21')
+      return 1
+    }
     const rl = createInterface({ input: stdin, output: stdout })
     try {
       console.log(`Marketplaces: ${MARKETPLACE_IDS.join(', ')}\n`)

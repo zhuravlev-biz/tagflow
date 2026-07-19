@@ -53,6 +53,69 @@ describe('probe engine', () => {
     const results = await engine.check('de', ['B00000000A'])
     expect(results.get('B00000000A')).toBe('unknown')
   })
+
+  it('calls onWarn with a concise, credential-free message on a network error', async () => {
+    const fetchFn = vi.fn(async () => {
+      throw new Error('ECONNRESET')
+    })
+    const onWarn = vi.fn()
+    const engine = createProbeEngine({
+      fetchFn: fetchFn as unknown as typeof fetch,
+      sleep: noSleep,
+      onWarn,
+    })
+    await engine.check('de', ['B00000000A'])
+    expect(onWarn).toHaveBeenCalledTimes(1)
+    const message = onWarn.mock.calls[0]?.[0] as string
+    expect(message).toContain('de')
+    expect(message).toContain('ECONNRESET')
+  })
+
+  it('reports a plain 200 with a normal body as ok', async () => {
+    const fetchFn = vi.fn(
+      async () => new Response('<html><body>Widget — buy now</body></html>', { status: 200 }),
+    )
+    const engine = createProbeEngine({ fetchFn: fetchFn as typeof fetch, sleep: noSleep })
+    const results = await engine.check('de', ['B00000000A'])
+    expect(results.get('B00000000A')).toBe('ok')
+  })
+
+  it('treats a 200 captcha/robot-check page as unknown, not missing', async () => {
+    const fetchFn = vi.fn(
+      async () =>
+        new Response('<html><body>Enter the CAPTCHA below to prove you are not a robot.</body></html>', {
+          status: 200,
+        }),
+    )
+    const engine = createProbeEngine({ fetchFn: fetchFn as typeof fetch, sleep: noSleep })
+    const results = await engine.check('com', ['B00000000A'])
+    expect(results.get('B00000000A')).toBe('unknown')
+  })
+
+  it('treats a 200 amazon robot-check page (support email marker) as unknown', async () => {
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(
+          'To discuss automated access to Amazon data please contact api-services-support@amazon.com',
+          { status: 200 },
+        ),
+    )
+    const engine = createProbeEngine({ fetchFn: fetchFn as typeof fetch, sleep: noSleep })
+    const results = await engine.check('com', ['B00000000A'])
+    expect(results.get('B00000000A')).toBe('unknown')
+  })
+
+  it('treats a 200 redirected away from the ASIN as unknown', async () => {
+    const fetchFn = vi.fn(async () => ({
+      status: 200,
+      url: 'https://www.amazon.com/s?k=widget',
+      text: async () => '<html><body>Results for widget</body></html>',
+      body: { cancel: async () => undefined },
+    }))
+    const engine = createProbeEngine({ fetchFn: fetchFn as unknown as typeof fetch, sleep: noSleep })
+    const results = await engine.check('com', ['B00000000A'])
+    expect(results.get('B00000000A')).toBe('unknown')
+  })
 })
 
 describe('paapi engine', () => {
@@ -85,6 +148,9 @@ describe('paapi engine', () => {
     const body = JSON.parse(String(init.body)) as Record<string, unknown>
     expect(body['PartnerTag']).toBe('yourtag-21')
     expect(body['Marketplace']).toBe('www.amazon.de')
+    // Resources is optional and defaults to ["ItemInfo.Title"] server-side;
+    // omit it entirely rather than sending an empty array.
+    expect(body).not.toHaveProperty('Resources')
   })
 
   it('batches more than 10 ASINs into multiple requests', async () => {
@@ -100,12 +166,37 @@ describe('paapi engine', () => {
 
   it('marks the whole batch unknown on auth/throttle errors', async () => {
     const fetchFn = vi.fn(async () => Response.json({ Errors: [] }, { status: 429 }))
+    const onWarn = vi.fn()
     const engine = createPaapiEngine(credentials, {
       fetchFn: fetchFn as typeof fetch,
       sleep: noSleep,
+      onWarn,
     })
     const results = await engine.check('com', ['B00000000A'])
     expect(results.get('B00000000A')).toBe('unknown')
+    expect(onWarn).toHaveBeenCalledTimes(1)
+    const message = onWarn.mock.calls[0]?.[0] as string
+    expect(message).toContain('com')
+    expect(message).toContain('429')
+  })
+
+  it('calls onWarn with a concise, credential-free message on a network error', async () => {
+    const fetchFn = vi.fn(async () => {
+      throw new Error('getaddrinfo ENOTFOUND')
+    })
+    const onWarn = vi.fn()
+    const engine = createPaapiEngine(credentials, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      sleep: noSleep,
+      onWarn,
+    })
+    const results = await engine.check('com', ['B00000000A'])
+    expect(results.get('B00000000A')).toBe('unknown')
+    expect(onWarn).toHaveBeenCalledTimes(1)
+    const message = onWarn.mock.calls[0]?.[0] as string
+    expect(message).toContain('com')
+    expect(message).toContain('ENOTFOUND')
+    expect(message).not.toContain(credentials.secretKey)
   })
 })
 
@@ -151,5 +242,37 @@ describe('signRequest', () => {
       date: new Date('2026-07-12T00:00:00Z'),
     })
     expect(again['authorization']).toBe(headers['authorization'])
+  })
+
+  it('matches a frozen golden signature for a fixed input', () => {
+    // Regression guard for canonicalization drift: header ordering, the
+    // body hash, and the credential scope all feed the signature, and a hex
+    // shape check alone wouldn't catch a subtly wrong canonical form. This
+    // authorization header was computed once (offline, same algorithm) for
+    // the fixed inputs below and is hard-coded so any future change to
+    // header casing/sorting, body hashing, or scope construction fails loudly.
+    const headers = signRequest({
+      method: 'POST',
+      host: 'webservices.amazon.com',
+      path: '/paapi5/getitems',
+      region: 'us-east-1',
+      service: 'ProductAdvertisingAPI',
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'content-encoding': 'amz-1.0',
+        'x-amz-target': 'com.amazon.paapi5.v1.ProductAdvertisingAPIv1.GetItems',
+      },
+      body:
+        '{"ItemIds":["B00000000A"],"ItemIdType":"ASIN","PartnerTag":"yourtag-20",' +
+        '"PartnerType":"Associates","Marketplace":"www.amazon.com"}',
+      accessKey: 'AKIDEXAMPLE',
+      secretKey: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY',
+      date: new Date('2015-08-30T12:36:00Z'),
+    })
+    expect(headers['authorization']).toBe(
+      'AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/ProductAdvertisingAPI/aws4_request, ' +
+        'SignedHeaders=content-encoding;content-type;host;x-amz-date;x-amz-target, ' +
+        'Signature=e633dbf171e9ed6fe6f17c1cac2c608dea6d9e323e57686ef91301adf3562ee7',
+    )
   })
 })

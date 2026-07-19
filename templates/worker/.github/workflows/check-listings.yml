@@ -6,6 +6,12 @@
 # PAAPI_SECRET_KEY repository secrets. The plain HTTPS probe engine is NOT
 # suitable here: it must run from your own machine and IP, never from CI or
 # datacenter infrastructure.
+#
+# Heads-up (2026-07): Amazon has deprecated PA-API in favor of the Creators
+# API, so this engine may stop working without notice — checks then report
+# "unverified" rather than failing spuriously. A Creators API engine is on
+# the tagflow roadmap; watch its releases and update the flag here when it
+# lands.
 name: check-listings
 
 on:

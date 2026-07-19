@@ -63,35 +63,54 @@ projects prove both demand and the distribution model.
 
 ### Functional (v0.1 MUST)
 
-- **F1 — Geo resolution.** Map visitor country (ISO 3166-1 alpha-2 from
+> **Status (2026-07-18): F1–F12 all ✅ Done.** Verified against
+> `packages/core/src/resolve.ts`, `config.ts`, `go-url.ts` and
+> `packages/cloudflare/src/handler.ts`.
+
+- **F1 — Geo resolution.** ✅ Done — `resolve.ts`'s `candidateForCountry()`
+  implements override → `COUNTRY_TO_MARKETPLACE` → default; `XX`/`T1`/missing
+  handled by `marketplaceForCountry()`. Map visitor country (ISO 3166-1 alpha-2
+  from
   `request.cf.country`) to an Amazon marketplace via: per-country config
   override → built-in curated nearest-storefront map → configured default
   marketplace. Missing/`XX`/`T1` country codes resolve to the default.
-- **F2 — Tag correctness.** Every emitted URL carries the affiliate tag
+- **F2 — Tag correctness.** ✅ Done — `resolve.ts`'s `failureOf()` gates on a
+  missing tag before any URL is emitted. Every emitted URL carries the affiliate tag
   configured *for that marketplace*. **Never emit an untagged Amazon link and
   never emit a tag on the wrong marketplace** (a mis-marketplace tag earns
   nothing and can look spammy). If the chosen marketplace has no tag, fall back
   (F3) rather than dropping the tag.
-- **F3 — Explicit fallback chain.** When the candidate marketplace fails any
+- **F3 — Explicit fallback chain.** ✅ Done — `resolveCurated()` builds a
+  ≤3-hop chain; `parseConfig()` rejects cyclic `marketplaceFallbacks` and
+  requires the default marketplace to carry a tag. Status (2026-07-19): a
+  cyclic-fallback config now reports one error per cycle (deduped via a
+  `reported` node set in `config.ts`) instead of one per cycle member — same
+  rejection, clearer output. When the candidate marketplace fails any
   gate (no tag configured, product not available there), walk a deterministic
   chain: candidate → configured regional fallback → default marketplace. The
   default marketplace is validated at config-load time to have a tag; products
   are assumed available there. The resolution must always terminate with a
   valid, tagged URL — never a search page, never an error page for the visitor.
-- **F4 — Per-marketplace ASIN overrides.** The same physical product often has
+- **F4 — Per-marketplace ASIN overrides.** ✅ Done — `ProductConfig.asinByMarketplace`
+  in `config.ts`, consumed in `redirectDecision()`. The same physical product often has
   different ASINs across storefronts (third-party listings). Product entries
   support a base `asin` plus `asinByMarketplace` overrides.
-- **F5 — Availability model.** Products declare `availableIn` (list of
+- **F5 — Availability model.** ✅ Done — `ProductConfig.availableIn`, gated in
+  `resolveCurated`'s `failureOf`; default marketplace skips the gate as specified. Products declare `availableIn` (list of
   marketplaces). Resolution treats absence as "fall back", not "guess". This is
   the deterministic replacement for OneLink's catalog matching: correctness
   comes from a maintained map (see CLI, §10), not from scraping at request time.
-- **F6 — Two link modes.**
+- **F6 — Two link modes.** ✅ Done — `resolve()` dispatches curated vs raw
+  ASIN, with `unknownAsin` policy in `resolveRawAsin()`.
   - *Curated*: `/go/<productKey>` — full waterfall (the primary mode).
   - *Raw ASIN*: `/go/amazon/<asin>` — for one-off links without a product
     entry; availability unknown, so behavior follows a config policy
     `unknownAsin: "geo" | "default"` (redirect to geo marketplace and hope, or
     play safe to the default marketplace). Default: `"default"`.
-- **F7 — Mountable adapter.** The Worker handler must work in BOTH shapes:
+- **F7 — Mountable adapter.** ✅ Done — `packages/cloudflare/src/handler.ts`
+  returns `null` for non-matching paths/unknown keys; verified live by both
+  `templates/worker/src/index.ts` (standalone) and
+  `examples/astro-static-assets/worker/index.ts` (mounted). The Worker handler must work in BOTH shapes:
   - standalone Worker template (`wrangler deploy` and done);
   - **mounted under a path prefix inside an existing Worker that serves static
     assets** (the Astro/Next-on-Workers case): handler returns a `Response` for
@@ -99,65 +118,113 @@ projects prove both demand and the distribution model.
     `env.ASSETS.fetch(request)`. This mode is a first-class citizen, not an
     afterthought — many target users already serve their site from a Worker and
     must not need a second zone, domain, or deployment.
-- **F8 — Build-time helper.** A tiny pure function (e.g.
+- **F8 — Build-time helper.** ✅ Done — `packages/core/src/go-url.ts`,
+  zero-dependency, plus `goAmazonUrl`; used in
+  `examples/astro-static-assets/src/pages/index.astro`. A tiny pure function (e.g.
   `goUrl(productKey, { base })` → `/go/<productKey>`) importable by any
   framework's build so site templates never hand-write redirect paths. Zero
   runtime dependencies; usable from `.astro`, JSX, MDX, Liquid, anything.
-- **F9 — Response semantics.** `302` (not `301` — mappings and tags change),
+  Status (2026-07-19): `goUrl()` now throws a `TypeError` at build time for an
+  empty or reserved (`amazon`) product key, and `goAmazonUrl()` throws for an
+  empty ASIN — both are guaranteed-dead links, so the mistake surfaces as a
+  build failure instead of a production 404. Full key/ASIN shape validation
+  remains `parseConfig`'s job (F12), not this helper's.
+- **F9 — Response semantics.** ✅ Done — `handler.ts` returns 302 with
+  `cache-control: no-store` and `x-robots-tag: noindex`; no `Referrer-Policy`
+  header set, preserving the browser default as specified. `302` (not `301` — mappings and tags change),
   `Cache-Control: no-store` (geo-dependent), `X-Robots-Tag: noindex`. Rely on
   default browser referrer policy so the destination sees the linking origin
   (Amazon compliance requires the traffic source to be identifiable, §11).
-- **F10 — Single-marketplace degenerate mode.** With exactly one marketplace
+- **F10 — Single-marketplace degenerate mode.** ✅ Done — explicitly covered
+  by `packages/core/test/resolve.test.ts` ("single-marketplace degenerate mode
+  (F10)"). With exactly one marketplace
   configured, every click resolves to it — output identical to direct linking.
   This lets a site adopt the Worker on day one with one Associates membership
   and add marketplaces later purely by editing config. Adding a marketplace
   must never require touching published content.
-- **F11 — Click analytics.** One Analytics Engine data point per click:
+- **F11 — Click analytics.** ✅ Done — `handler.ts`'s `logClick()` via
+  `ctx.waitUntil`, optional (no-op without a binding), wrapped in try/catch,
+  dimensions match spec exactly. One Analytics Engine data point per click:
   dimensions `country`, `marketplaceResolved`, `productKey` (or raw ASIN),
   `resolutionReason` (`direct` | `fallback-no-tag` | `fallback-unavailable` |
   `unknown-country` | `raw-asin`), `uaClass` (`desktop` | `mobile` | `bot`);
   metric: count. Analytics is **optional**: no AE binding configured → skip
   logging, never fail the redirect. Redirect first, log via `ctx.waitUntil`.
-- **F12 — Config validation.** Load-time validation with precise errors:
+  Status (2026-07-19): only `GET` requests are logged as clicks —
+  HEAD/OPTIONS/POST still get the redirect but are treated as prefetch/
+  preflight noise, not counted — and the logged `country` blob is uppercased
+  to match what `resolve()` normalizes internally (see §8).
+- **F12 — Config validation.** ✅ Done — `packages/core/src/config.ts`'s
+  `parseConfig()` covers every listed invariant, including reserved-key and
+  cycle detection. Load-time validation with precise errors:
   default marketplace has a tag; every `availableIn`/override references a known
   marketplace; tag format sanity (warn, don't block — suffix conventions vary
   by storefront); no product key collides with reserved route segments.
+  Status (2026-07-19): `createAffiliateHandler` in `packages/cloudflare/src/
+  handler.ts` now runs `parseConfig` unconditionally at startup for *both*
+  raw JSON and already-parsed `Config` input. A shape-sniffing heuristic that
+  previously skipped validation for raw JSON already shaped like the
+  documented schema was removed after review — it let malformed-but-
+  schema-shaped input (e.g. a tagless default marketplace) through and
+  produce untagged redirects, violating F2. `goUrl`/`goAmazonUrl` in
+  `packages/core/src/go-url.ts` add a narrower, build-time backstop (see F8);
+  full shape validation remains `parseConfig`'s job.
 
 ### Functional (SHOULD, v0.2+)
 
-- **F13 — A/B variants.** Weighted destination variants per product, stateless
+> **Status (2026-07-18): F13–F17 all ⬜ Not done** — none implemented yet;
+> tracked for v0.2/v0.3 per the roadmap (§13).
+
+- **F13 — A/B variants.** ⬜ Not done — no `variant`/weighting concept in
+  `config.ts`, `resolve.ts`, or types. Weighted destination variants per product, stateless
   random assignment per click (no cookies), `variant` dimension in analytics.
-- **F14 — Choice pages.** Optional per-product multi-retailer page (Amazon +
+- **F14 — Choice pages.** ⬜ Not done — no multi-retailer HTML rendering
+  anywhere in `packages/cloudflare/src`. Optional per-product multi-retailer page (Amazon +
   other stores) rendered by the Worker: single self-contained HTML response,
   inline CSS, no external assets, light/dark aware.
-- **F15 — Non-Amazon destinations.** Generalize the destination model so a
+- **F15 — Non-Amazon destinations.** ⬜ Not done — `resolve.ts` only produces
+  `https://www.amazon.<domain>/dp/<asin>` URLs; no generic retailer-URL model
+  yet. Generalize the destination model so a
   product can route to arbitrary per-country retailer URLs (config-supplied,
   tag logic bypassed). Design the config for this now (§6) even though v0.1
   implements Amazon only.
-- **F16 — Device routing.** UA-based mobile deep links (app URLs) where
+- **F16 — Device routing.** ⬜ Not done — `ua.ts` only classifies
+  `desktop|mobile|bot` for analytics; no deep-link routing logic exists. UA-based mobile deep links (app URLs) where
   configured.
-- **F17 — Earnings correlation.** CLI import of Associates earnings reports
+- **F17 — Earnings correlation.** ⬜ Not done — no `import-earnings` command
+  or earnings-CSV code anywhere in the repo. CLI import of Associates earnings reports
   (CSV) joined against click data by tracking tag + date for a
   clicks-vs-orders view per marketplace.
 
 ### Non-functional
 
-- **N1 — Free-tier fit.** Everything runs on the Workers free plan: ≤10 ms CPU
+> **Status (2026-07-18): N1–N5 all ✅ Done.**
+
+- **N1 — Free-tier fit.** ✅ Done — no I/O/KV/D1 in `resolve()` (pure map
+  lookups); free-tier numbers documented in README and `wrangler.jsonc`. Everything runs on the Workers free plan: ≤10 ms CPU
   per request budget (typical resolution should be well under 1 ms — one map
   lookup chain, no I/O), config bundled at build time (no KV/D1 dependency in
   v0.1; KV-backed config MAY be an opt-in adapter later).
-- **N2 — Privacy by design.** No cookies, no localStorage, no fingerprinting,
+- **N2 — Privacy by design.** ✅ Done — no cookies/localStorage/PII anywhere
+  in `packages/cloudflare/src`; reasoning + snippet in `docs/COMPLIANCE.md`. No cookies, no localStorage, no fingerprinting,
   no PII stored. Analytics dimensions are aggregate-safe (country, not IP).
   This makes the Worker consent-banner-neutral under GDPR/ePrivacy — a
   headline feature for EU-based publishers; document the reasoning, and keep
   it true (adding a "convenient" cookie later would silently create a consent
   obligation for every downstream site).
-- **N3 — Core purity.** `core` package: zero dependencies, no Cloudflare
+- **N3 — Core purity.** ✅ Done — `packages/core/package.json` has zero
+  runtime dependencies; no `Date.now()`/`Math.random()`/I/O in `resolve.ts` or
+  `config.ts`. `core` package: zero dependencies, no Cloudflare
   imports, no I/O, no `Date.now()`/randomness in `resolve()` (A/B randomness
   is injected). Fully unit-testable in plain vitest.
 - **N4 — Strict TypeScript, ESM-only, exact-pinned dependencies** (no `^`/`~`),
-  Node ≥ 20 for tooling, `wrangler` v4 for the template.
-- **N5 — SEO safety.** Redirect paths carry `rel="sponsored nofollow"` guidance
+  Node ≥ 20 for tooling, `wrangler` v4 for the template. ✅ Done — verified
+  across every `package.json` in the repo: exact versions throughout,
+  `"type": "module"` everywhere, `"engines": {"node": ">=20"}` set,
+  `wrangler: "4.110.0"`.
+- **N5 — SEO safety.** ✅ Done — `x-robots-tag: noindex` in `handler.ts`;
+  `rel="sponsored nofollow"` guidance and a `robots.txt` snippet in
+  `docs/COMPLIANCE.md`, used live in the Astro example. Redirect paths carry `rel="sponsored nofollow"` guidance
   in docs; `noindex` on responses (F9); README includes a robots.txt snippet
   disallowing the mount prefix.
 
@@ -259,13 +326,23 @@ respects `availableIn` exactly, and is pure (same input → same output).
 
 ## 8 · Cloudflare adapter (spec)
 
-- Extract country from `request.cf?.country`; UA class from a minimal
+- `createAffiliateHandler(config, opts)` runs `parseConfig` on `config`
+  unconditionally at startup — whether `config` is raw JSON or an
+  already-parsed `Config` object — never per request. There is no
+  shape-sniffing fast path that skips validation; a config that merely
+  *looks* schema-shaped still gets full invariant checking (F12).
+- Extract country from `request.cf?.country`, uppercased once at the top of
+  the handler so the value logged to Analytics Engine matches what
+  `resolve()` normalizes internally; UA class from a minimal
   UA heuristic (goal: bot flagging for analytics, not perfect detection —
   do not add a UA-parser dependency).
 - Match prefix; non-matching path → return `null` (mounted mode contract).
 - Build `Response.redirect(decision.url, 302)` with headers per F9.
 - `ctx.waitUntil(logClick(env.CLICKS, decision, ctx))` — never block or fail
-  the redirect on analytics errors (F11).
+  the redirect on analytics errors (F11). Only `GET` requests write an
+  Analytics Engine data point; `HEAD`/`OPTIONS`/`POST` etc. still receive the
+  302 but are treated as prefetch/preflight noise rather than visitor clicks
+  and are not logged.
 - Bot policy (`opts.bots`): `"redirect"` (default; logged with `uaClass=bot`)
   or `"ignore"` (redirect but skip logging).
 - Standalone template: `index.ts` is ~10 lines wiring the handler + a 404
@@ -303,12 +380,28 @@ export default {
 
 ## 10 · CLI (spec)
 
+> **Status (2026-07-18):** `init`/`validate`/`check` ✅ Done; `stats` and
+> `import-earnings` ⬜ Not done (tracked for v0.2/v0.3, consistent with the
+> roadmap).
+
 Node CLI (`npx <pkg> …`), runs on the user's machine — never in the Worker:
 
-- **`init`** — scaffold `affiliate.config.json` (interactive: default
+- **`init`** ✅ Done — `packages/cli/src/commands/init.ts`, interactive +
+  flag-driven, prints the standalone-vs-mounted next steps. Scaffold `affiliate.config.json` (interactive: default
   marketplace, tags) and print the standalone-vs-mounted setup choice.
-- **`validate`** — schema + invariants (F12); non-zero exit for CI.
-- **`check`** — for each product × tagged marketplace, verify the listing
+  Status (2026-07-19): when required flags (`--default`/`--tag`) are missing
+  and stdin is not a TTY, `init` now fails fast with a clear error instead of
+  hanging on a prompt nobody can answer (checked via `stdin.isTTY`). All
+  config writes (`init`'s scaffold, `check --write`) go through
+  `config-io.ts`'s atomic write — temp file in the same directory, then
+  `rename()` over the target — so a crash or concurrent run can't leave a
+  partially-written `affiliate.config.json`.
+- **`validate`** ✅ Done — `packages/cli/src/commands/validate.ts`, non-zero
+  exit on error, prints warnings. Schema + invariants (F12); non-zero exit for CI.
+- **`check`** ✅ Done — `packages/cli/src/commands/check.ts` +
+  `packages/cli/src/check/engines.ts`; `--write` diffing, exit code 2 on
+  regression; weekly GH Action shipped at
+  `templates/worker/.github/workflows/check-listings.yml`. For each product × tagged marketplace, verify the listing
   exists; update `availableIn` (with `--write`) and print a diff table;
   non-zero exit when a previously-available listing disappears (CI-able as a
   weekly GitHub Action — provide the workflow file in the template).
@@ -317,10 +410,34 @@ Node CLI (`npx <pkg> …`), runs on the user's machine — never in the Worker:
     Document clearly: the probe runs client-side at the user's own risk and
     discretion, is rate-limited with jitter, sends no affiliate tag, and must
     never be executed from Workers/datacenter infrastructure.
-- **`stats`** — query AE's SQL API (needs account ID + API token via env
+  - **PA-API deprecation (2026-07-19):** Amazon's PA-API documentation now
+    carries the notice "PA-API will be deprecated on May 15th, 2026. Please
+    migrate to Creators API" (verified live at
+    `webservices.amazon.com/paapi5/documentation/faq.html`; Creators API docs
+    at `affiliate-program.amazon.com/creatorsapi/docs/en-us/introduction`).
+    That date has passed. `--engine paapi` (`packages/cli/src/check/
+    engines.ts`'s `createPaapiEngine`) is therefore deprecated upstream and
+    may stop working without notice. The HTTPS probe engine is unaffected and
+    remains the default for local runs — but note the template's weekly
+    `check-listings.yml` Action uses `--engine paapi` (the probe engine must
+    never run from datacenter IPs, so it is the only CI-appropriate engine),
+    which means the shipped CI monitor degrades to all-`unknown` if Amazon
+    turns PA-API off. Migrating `check`'s API engine from PA-API to the
+    Creators API is tracked as a new v0.2 roadmap item (§13).
+  - Status (2026-07-19): the probe engine no longer trusts a bare HTTP 200 as
+    proof of a live listing. `classifyOkResponse()` in `engines.ts` reads the
+    response body for captcha/robot-check markers and checks whether the
+    final URL still contains the requested ASIN (a redirect to the
+    storefront or a search page means the listing is gone); either case now
+    yields `unknown` instead of a false `ok`. Both engines also accept an
+    `onWarn` diagnostic callback (`EngineIo.onWarn`), wired to `console.error`
+    in `check.ts`, so network errors and non-200 responses are surfaced as
+    warnings instead of being silently folded into `unknown`.
+- **`stats`** ⬜ Not done — no command wired in `packages/cli/src/cli.ts`, no
+  AE SQL API querying code anywhere in the repo. Query AE's SQL API (needs account ID + API token via env
   vars): clicks by country/marketplace/product/reason over a window; the
   fallback-leak report from §9.
-- **`import-earnings`** (v0.3, F17).
+- **`import-earnings`** ⬜ Not done (v0.3, F17) — absent entirely.
 
 ## 11 · Compliance & privacy (ship as a docs page, encode as defaults)
 
@@ -350,26 +467,67 @@ This section is a differentiator — every DIY blog post hand-waves it.
 
 ## 12 · Testing & CI
 
+> **Status (2026-07-18):** core coverage/property/ISO tests ✅ Done; CI
+> lint+typecheck+test and template smoke-deploy ✅ Done; cloudflare tests and
+> cli tests 🟡 Partial (equivalent coverage, different mechanism than
+> specified — see notes below); changesets release workflow ⬜ Not done.
+
 - `core`: plain vitest; 100% branch coverage on `resolve()` is realistic and
   worth enforcing; property tests from §7; a full-ISO-coverage test for the
-  country map.
+  country map. ✅ Done — enforced via `packages/core/vitest.config.ts`
+  coverage thresholds on `src/resolve.ts`; property tests in
+  `resolve.test.ts`; `country-map.test.ts` asserts all 249 ISO codes present
+  with no dupes. Status (2026-07-19): `vitest.config.ts` also gates
+  `config.ts` coverage now (branches 90% / lines+statements 93% floors, set
+  just below actual post-fix coverage so it can't silently regress).
 - `cloudflare`: `@cloudflare/vitest-pool-workers` (Workers runtime tests:
   route matching, mounted-mode `null` contract, headers, `waitUntil` logging;
-  simulate `request.cf` variants including missing `cf`).
+  simulate `request.cf` variants including missing `cf`). 🟡 Partial —
+  `packages/cloudflare/test/handler.test.ts` covers the same behaviors (route
+  matching, `null` contract, headers, `waitUntil`) but via plain vitest with
+  hand-mocked `Request`/`cf`/`ctx` objects, not an actual Workers runtime —
+  `@cloudflare/vitest-pool-workers` is not a dependency anywhere in the repo.
 - `cli`: golden-file tests for `validate`/`check` output; probe engine mocked.
+  🟡 Partial — `packages/cli/test/commands.test.ts` and `engines.test.ts` are
+  thorough behavioral tests (exit codes, config diffs, mocked engines) but
+  assert on parsed state/exit codes rather than golden-file/snapshot
+  comparisons of stdout; no fixture files exist. Status (2026-07-19): the
+  suite grew from 21 to 37 tests (`commands.test.ts` 18,
+  `config-io.test.ts` 4, `engines.test.ts` 15), adding coverage for engine
+  selection, the atomic config write (§10), captcha/redirect-away
+  classification in the probe engine, and a frozen golden-value test for the
+  SigV4 signer (`engines.test.ts`, "matches a frozen golden signature for a
+  fixed input") — still not golden-file/snapshot comparisons of CLI stdout,
+  so the mechanism gap noted above stands.
 - GitHub Actions: lint (Biome) + typecheck + test on PR; release
   via changesets → npm (provenance enabled); template repo smoke-deploy job
-  with `wrangler deploy --dry-run`.
+  with `wrangler deploy --dry-run`. Lint+typecheck+test ✅ Done and template
+  smoke-deploy ✅ Done (both in `.github/workflows/ci.yml`); the
+  changesets → npm release workflow is ⬜ Not done — no `.changeset`
+  directory, no changesets dependency, no publish workflow exists yet (and
+  none of the publishable packages have a `repository` field yet, which npm
+  provenance requires — moot until a git remote exists). Status
+  (2026-07-19): a `template-copyout` job was added
+  (`.github/workflows/ci.yml`) that reproduces the documented user flow
+  end-to-end — pack `core`/`cloudflare`/`cli` to tarballs, copy
+  `templates/worker` out of the workspace, point its deps at the tarballs,
+  `pnpm install`, `tsc --noEmit`, `wrangler deploy --dry-run`. The prior
+  `template-smoke` job only exercised the template from inside the
+  workspace, which masked a real `workspace:*`-dependency breakage for
+  copied-out users; `templates/worker/package.json` now pins exact versions
+  (`0.1.0`) instead of `workspace:*` and ships a self-contained `tsconfig.json`
+  (no `extends` into the monorepo) so it builds standalone. In-repo installs
+  still link via `pnpm-workspace.yaml`'s `linkWorkspacePackages: true`.
 
 ## 13 · Roadmap
 
-| Version | Scope |
-|---|---|
-| **v0.1** | F1–F12, N1–N5; `core` + `cloudflare` + `cli init/validate/check`; standalone template + mounted Astro example; README + compliance doc. Ship when the mounted example runs on a real site. |
-| **v0.2** | `stats` CLI + fallback-leak report; A/B variants (F13); choice pages (F14). |
-| **v0.3** | Non-Amazon destinations (F15); device routing (F16); earnings import (F17). |
-| **v1.0** | API freeze, schema `v1` frozen, docs site. |
-| Post-1.0 (maybe) | Read-only stats dashboard (static page over AE API, Sink-style); KV-backed config adapter for no-rebuild updates. |
+| Version | Status | Scope |
+|---|---|---|
+| **v0.1** | ✅ Done | F1–F12, N1–N5; `core` + `cloudflare` + `cli init/validate/check`; standalone template + mounted Astro example; README + compliance doc. Ship when the mounted example runs on a real site. Exit criterion met — the Astro mounted example is built and runnable (`examples/astro-static-assets`). Remaining v0.1-adjacent gaps: changesets release workflow, Workers-runtime tests via `vitest-pool-workers`, and CLI golden-file tests (see §12) are not yet done but were not v0.1 MUSTs. Status (2026-07-19): the copied-out-template gap closed — `template-copyout` CI job + exact-pinned `templates/worker` deps (see §12) now prove the documented user flow works outside the workspace. |
+| **v0.2** | ⬜ Not started | `stats` CLI + fallback-leak report; A/B variants (F13); choice pages (F14); migrate `check`'s API engine from PA-API to the Creators API (§10, §15 — PA-API's deprecation date has passed). |
+| **v0.3** | ⬜ Not started | Non-Amazon destinations (F15); device routing (F16); earnings import (F17). |
+| **v1.0** | ⬜ Not started | API freeze, schema `v1` frozen, docs site. |
+| Post-1.0 (maybe) | ⬜ Not started | Read-only stats dashboard (static page over AE API, Sink-style); KV-backed config adapter for no-rebuild updates. |
 
 **Launch checklist (marketing is the point):** good README with a 60-second
 quickstart GIF and the "$0 on Cloudflare free tier" table; `examples/` runnable;
@@ -410,3 +568,12 @@ keywords (`amazon-associates`, `affiliate`, `onelink-alternative`,
   Compliance"; URLgenius policy guide.
 - Amazon serves Portugal via amazon.es (no amazon.pt) — encoded in the
   country map.
+- **PA-API deprecation (verified live 2026-07-19):** Amazon's PA-API
+  documentation carries the notice "PA-API will be deprecated on May 15th,
+  2026. Please migrate to Creators API"
+  (`webservices.amazon.com/paapi5/documentation/faq.html`; Creators API docs:
+  `affiliate-program.amazon.com/creatorsapi/docs/en-us/introduction`). That
+  date has passed. `check`'s `--engine paapi` path (§10) is deprecated
+  upstream and may stop working; the HTTPS probe engine is unaffected and
+  remains the default; migrating to the Creators API is a v0.2 roadmap item
+  (§13).
