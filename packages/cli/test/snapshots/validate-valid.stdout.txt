@@ -1,0 +1,1 @@
+✓ <fixtures>/valid.json is valid — 2 product(s), 2 tagged marketplace(s), default "com"

@@ -1,0 +1,12 @@
+{
+  "defaultMarketplace": "com",
+  "tags": { "com": "yourtag-20", "de": "yourtag-21" },
+  "products": {
+    "widget": { "asin": "B000000001", "availableIn": ["com", "de"] },
+    "gadget": {
+      "asin": "B000000002",
+      "asinByMarketplace": { "de": "B0000000DE" },
+      "availableIn": ["com"]
+    }
+  }
+}

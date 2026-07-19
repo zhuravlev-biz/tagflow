@@ -1,0 +1,1 @@
+✗ config file not found: <fixtures>/nope-does-not-exist.json

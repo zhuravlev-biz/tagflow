@@ -224,7 +224,7 @@ describe('signRequest', () => {
         'SignedHeaders=content-type;host;x-amz-date;x-amz-target, ' +
         `Signature=${headers['authorization']?.split('Signature=')[1]}`,
     )
-    // Golden value: locks the canonicalization against regressions.
+    // Snapshot value: locks the canonicalization against regressions.
     expect(headers['authorization']?.split('Signature=')[1]).toMatch(/^[0-9a-f]{64}$/)
     const again = signRequest({
       method: 'POST',
@@ -244,7 +244,7 @@ describe('signRequest', () => {
     expect(again['authorization']).toBe(headers['authorization'])
   })
 
-  it('matches a frozen golden signature for a fixed input', () => {
+  it('matches a frozen snapshot signature for a fixed input', () => {
     // Regression guard for canonicalization drift: header ordering, the
     // body hash, and the credential scope all feed the signature, and a hex
     // shape check alone wouldn't catch a subtly wrong canonical form. This

@@ -1,0 +1,8 @@
+{
+  "defaultMarketplace": "com",
+  "tags": { "com": "mytag" },
+  "countryOverrides": { "ZZ": "com" },
+  "products": {
+    "widget": { "asin": "notarealasin", "availableIn": ["com"] }
+  }
+}

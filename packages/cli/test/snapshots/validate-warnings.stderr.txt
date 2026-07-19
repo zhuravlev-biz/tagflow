@@ -1,0 +1,4 @@
+<fixtures>/warnings.json: 3 warning(s)
+  warning: tags.com — "mytag" does not look like a typical Associates tag (expected e.g. "yourtag-21"); double-check it
+  warning: countryOverrides.ZZ — "ZZ" is not an assigned ISO 3166-1 alpha-2 code
+  warning: products.widget.asin — "notarealasin" does not look like an ASIN (10 chars, A–Z/0–9)

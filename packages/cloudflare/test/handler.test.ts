@@ -1,10 +1,10 @@
 import { parseConfig } from '@tagflow/core'
+import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test'
 import { describe, expect, it, vi } from 'vitest'
 import {
   classifyUserAgent,
   createAffiliateHandler,
   createAffiliateWorker,
-  type ExecutionContextLike,
 } from '../src/index.js'
 
 const CONFIG = {
@@ -24,25 +24,35 @@ interface RequestInit2 {
   method?: string | undefined
 }
 
+// Real Requests running in the real Workers runtime (workerd, via
+// @cloudflare/vitest-pool-workers) instead of hand-mocked objects. `cf` is a
+// genuine Workers-only `RequestInit` extension the pool supports — passing
+// (or omitting) it here exercises the exact same code path a real edge
+// request would, including the "no cf at all" case (local dev / some
+// preview requests).
 function makeRequest(url: string, init: RequestInit2 = {}): Request {
-  const request = new Request(url, {
+  return new Request(url, {
     ...(init.method === undefined ? {} : { method: init.method }),
     headers: init.userAgent === undefined ? {} : { 'user-agent': init.userAgent },
-  })
-  if (init.country !== undefined) {
-    Object.defineProperty(request, 'cf', { value: { country: init.country } })
-  }
-  return request as unknown as Request
+    ...(init.country === undefined
+      ? {}
+      : { cf: { country: init.country } as IncomingRequestCfProperties }),
+  } as RequestInit)
 }
 
-function makeCtx(): ExecutionContextLike & { promises: Promise<unknown>[] } {
+// Wraps a *real* `createExecutionContext()` so tests can still assert on how
+// many times `waitUntil` was called (and settle them via
+// `waitOnExecutionContext`), without hand-rolling the whole ExecutionContext
+// like the old plain-vitest suite did.
+function makeCtx(): { ctx: ExecutionContext; promises: Promise<unknown>[] } {
+  const ctx = createExecutionContext()
   const promises: Promise<unknown>[] = []
-  return {
-    promises,
-    waitUntil(promise: Promise<unknown>) {
-      promises.push(promise)
-    },
+  const originalWaitUntil = ctx.waitUntil.bind(ctx)
+  ctx.waitUntil = (promise: Promise<unknown>) => {
+    promises.push(promise)
+    return originalWaitUntil(promise)
   }
+  return { ctx, promises }
 }
 
 describe('createAffiliateHandler', () => {
@@ -75,10 +85,11 @@ describe('createAffiliateHandler', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) throw new Error('unreachable')
     const handler = createAffiliateHandler(result.config)
+    const { ctx } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
       {},
-      makeCtx(),
+      ctx,
     )
     expect(response?.status).toBe(302)
     expect(response?.headers.get('location')).toBe(
@@ -89,10 +100,11 @@ describe('createAffiliateHandler', () => {
   it('returns null for paths outside the prefix (mounted-mode contract, F7)', async () => {
     const handler = createAffiliateHandler(CONFIG)
     for (const path of ['/', '/about', '/gopher', '/going/widget']) {
+      const { ctx } = makeCtx()
       const response = await handler(
         makeRequest(`https://site.example${path}`, { userAgent: DESKTOP_UA }),
         {},
-        makeCtx(),
+        ctx,
       )
       expect(response, path).toBeNull()
     }
@@ -100,20 +112,22 @@ describe('createAffiliateHandler', () => {
 
   it('returns null for unknown product keys so the host 404 handles them', async () => {
     const handler = createAffiliateHandler(CONFIG)
+    const { ctx } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/no-such-thing', { userAgent: DESKTOP_UA }),
       {},
-      makeCtx(),
+      ctx,
     )
     expect(response).toBeNull()
   })
 
   it('302-redirects with F9 headers', async () => {
     const handler = createAffiliateHandler(CONFIG)
+    const { ctx } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
       {},
-      makeCtx(),
+      ctx,
     )
     expect(response).not.toBeNull()
     expect(response?.status).toBe(302)
@@ -126,10 +140,11 @@ describe('createAffiliateHandler', () => {
 
   it('falls back to the default marketplace when request.cf is missing', async () => {
     const handler = createAffiliateHandler(CONFIG)
+    const { ctx } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/widget', { userAgent: DESKTOP_UA }),
       {},
-      makeCtx(),
+      ctx,
     )
     expect(response?.headers.get('location')).toBe(
       'https://www.amazon.es/dp/B000000001?tag=tag-es-21',
@@ -138,16 +153,18 @@ describe('createAffiliateHandler', () => {
 
   it('honours a custom prefix', async () => {
     const handler = createAffiliateHandler(CONFIG, { prefix: '/out' })
+    const { ctx: ctxOut } = makeCtx()
     const viaOut = await handler(
       makeRequest('https://site.example/out/widget', { country: 'DE', userAgent: DESKTOP_UA }),
       {},
-      makeCtx(),
+      ctxOut,
     )
     expect(viaOut?.status).toBe(302)
+    const { ctx: ctxGo } = makeCtx()
     const viaGo = await handler(
       makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
       {},
-      makeCtx(),
+      ctxGo,
     )
     expect(viaGo).toBeNull()
   })
@@ -155,15 +172,15 @@ describe('createAffiliateHandler', () => {
   it('logs one data point per click via waitUntil (F11)', async () => {
     const handler = createAffiliateHandler(CONFIG)
     const writeDataPoint = vi.fn()
-    const ctx = makeCtx()
+    const { ctx, promises } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/widget', { country: 'FR', userAgent: DESKTOP_UA }),
       { CLICKS: { writeDataPoint } },
       ctx,
     )
     expect(response?.status).toBe(302)
-    expect(ctx.promises).toHaveLength(1)
-    await Promise.all(ctx.promises)
+    expect(promises).toHaveLength(1)
+    await waitOnExecutionContext(ctx)
     expect(writeDataPoint).toHaveBeenCalledExactlyOnceWith({
       // FR maps to fr, which has no tag → fallback chain ends at default es.
       // Trailing '' is the A/B variant slot (F13); this product has none.
@@ -176,7 +193,7 @@ describe('createAffiliateHandler', () => {
   it('normalizes a lowercase cf.country to uppercase before logging and resolving', async () => {
     const handler = createAffiliateHandler(CONFIG)
     const writeDataPoint = vi.fn()
-    const ctx = makeCtx()
+    const { ctx } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/widget', { country: 'de', userAgent: DESKTOP_UA }),
       { CLICKS: { writeDataPoint } },
@@ -185,14 +202,14 @@ describe('createAffiliateHandler', () => {
     expect(response?.headers.get('location')).toBe(
       'https://www.amazon.de/dp/B000000001?tag=tag-de-21',
     )
-    await Promise.all(ctx.promises)
+    await waitOnExecutionContext(ctx)
     expect(writeDataPoint.mock.calls[0]?.[0].blobs?.[0]).toBe('DE')
   })
 
   it('returns the 302 for a HEAD request but does not log a click', async () => {
     const handler = createAffiliateHandler(CONFIG)
     const writeDataPoint = vi.fn()
-    const ctx = makeCtx()
+    const { ctx, promises } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/widget', {
         method: 'HEAD',
@@ -208,38 +225,38 @@ describe('createAffiliateHandler', () => {
     )
     expect(response?.headers.get('cache-control')).toBe('no-store')
     expect(response?.headers.get('x-robots-tag')).toBe('noindex')
-    expect(ctx.promises).toHaveLength(0)
+    expect(promises).toHaveLength(0)
     expect(writeDataPoint).not.toHaveBeenCalled()
   })
 
   it('honours a custom analytics binding name', async () => {
     const handler = createAffiliateHandler(CONFIG, { analyticsBinding: 'AFFILIATE_CLICKS' })
     const writeDataPoint = vi.fn()
-    const ctx = makeCtx()
+    const { ctx } = makeCtx()
     await handler(
       makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
       { AFFILIATE_CLICKS: { writeDataPoint } },
       ctx,
     )
-    await Promise.all(ctx.promises)
+    await waitOnExecutionContext(ctx)
     expect(writeDataPoint).toHaveBeenCalledOnce()
   })
 
   it('skips logging silently when no analytics binding is configured', async () => {
     const handler = createAffiliateHandler(CONFIG)
-    const ctx = makeCtx()
+    const { ctx, promises } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
       {},
       ctx,
     )
     expect(response?.status).toBe(302)
-    expect(ctx.promises).toHaveLength(0)
+    expect(promises).toHaveLength(0)
   })
 
   it('never fails the redirect on analytics errors', async () => {
     const handler = createAffiliateHandler(CONFIG)
-    const ctx = makeCtx()
+    const { ctx, promises } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
       {
@@ -252,13 +269,13 @@ describe('createAffiliateHandler', () => {
       ctx,
     )
     expect(response?.status).toBe(302)
-    await expect(Promise.all(ctx.promises)).resolves.toBeDefined()
+    await expect(Promise.all(promises)).resolves.toBeDefined()
   })
 
   it('redirects bots and logs uaClass=bot under the default policy', async () => {
     const handler = createAffiliateHandler(CONFIG)
     const writeDataPoint = vi.fn()
-    const ctx = makeCtx()
+    const { ctx } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/widget', {
         country: 'DE',
@@ -268,14 +285,14 @@ describe('createAffiliateHandler', () => {
       ctx,
     )
     expect(response?.status).toBe(302)
-    await Promise.all(ctx.promises)
+    await waitOnExecutionContext(ctx)
     expect(writeDataPoint.mock.calls[0]?.[0].blobs?.[4]).toBe('bot')
   })
 
   it('bots: "ignore" redirects but skips logging', async () => {
     const handler = createAffiliateHandler(CONFIG, { bots: 'ignore' })
     const writeDataPoint = vi.fn()
-    const ctx = makeCtx()
+    const { ctx, promises } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/widget', {
         country: 'DE',
@@ -285,7 +302,7 @@ describe('createAffiliateHandler', () => {
       ctx,
     )
     expect(response?.status).toBe(302)
-    expect(ctx.promises).toHaveLength(0)
+    expect(promises).toHaveLength(0)
     expect(writeDataPoint).not.toHaveBeenCalled()
   })
 })
@@ -293,17 +310,19 @@ describe('createAffiliateHandler', () => {
 describe('createAffiliateWorker', () => {
   it('serves the redirect and a JSON 404 for everything else', async () => {
     const worker = createAffiliateWorker(CONFIG)
+    const { ctx: ctxRedirect } = makeCtx()
     const redirect = await worker.fetch(
       makeRequest('https://site.example/go/widget', { country: 'DE', userAgent: DESKTOP_UA }),
       {},
-      makeCtx(),
+      ctxRedirect,
     )
     expect(redirect.status).toBe(302)
 
+    const { ctx: ctxMissing } = makeCtx()
     const missing = await worker.fetch(
       makeRequest('https://site.example/go/nope', { userAgent: DESKTOP_UA }),
       {},
-      makeCtx(),
+      ctxMissing,
     )
     expect(missing.status).toBe(404)
     expect(await missing.json()).toEqual({ error: 'not found' })
@@ -327,7 +346,7 @@ describe('createAffiliateHandler choice pages (F14)', () => {
   it('renders a 200 HTML choice page with both links and the F14/F9 headers', async () => {
     const handler = createAffiliateHandler(CHOICE_CONFIG)
     const writeDataPoint = vi.fn()
-    const ctx = makeCtx()
+    const { ctx } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/pick', { country: 'DE', userAgent: DESKTOP_UA }),
       { CLICKS: { writeDataPoint } },
@@ -341,7 +360,7 @@ describe('createAffiliateHandler choice pages (F14)', () => {
     expect(body).toContain('https://www.amazon.de/dp/B0AAAAAAAA?tag=tag-de-21')
     expect(body).toContain('https://www.bol.com/x')
 
-    await Promise.all(ctx.promises)
+    await waitOnExecutionContext(ctx)
     const blobs = writeDataPoint.mock.calls[0]?.[0].blobs
     // blobs = [country, marketplace, productKey, reason, uaClass, variant]
     // (0-indexed) — a choice view has no single destination, so blobs[1] is
@@ -367,14 +386,14 @@ describe('createAffiliateHandler A/B variants (F13)', () => {
   it('logs 6 blobs with the assigned variant name in the 6th', async () => {
     const handler = createAffiliateHandler(VARIANT_CONFIG)
     const writeDataPoint = vi.fn()
-    const ctx = makeCtx()
+    const { ctx } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/multi', { country: 'DE', userAgent: DESKTOP_UA }),
       { CLICKS: { writeDataPoint } },
       ctx,
     )
     expect(response?.status).toBe(302)
-    await Promise.all(ctx.promises)
+    await waitOnExecutionContext(ctx)
     const blobs = writeDataPoint.mock.calls[0]?.[0].blobs
     expect(blobs).toHaveLength(6)
     expect(['a', 'b']).toContain(blobs?.[5])
@@ -396,7 +415,7 @@ describe('createAffiliateHandler retailer destinations (F15)', () => {
   it('302s straight to the retailer URL and logs ext:<key>/retailer', async () => {
     const handler = createAffiliateHandler(RETAILER_CONFIG)
     const writeDataPoint = vi.fn()
-    const ctx = makeCtx()
+    const { ctx } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/destProd', { country: 'DE', userAgent: DESKTOP_UA }),
       { CLICKS: { writeDataPoint } },
@@ -404,7 +423,7 @@ describe('createAffiliateHandler retailer destinations (F15)', () => {
     )
     expect(response?.status).toBe(302)
     expect(response?.headers.get('location')).toBe('https://www.bol.com/y')
-    await Promise.all(ctx.promises)
+    await waitOnExecutionContext(ctx)
     const blobs = writeDataPoint.mock.calls[0]?.[0].blobs
     expect(blobs?.[1]).toBe('ext:bol')
     expect(blobs?.[3]).toBe('retailer')
@@ -429,7 +448,7 @@ describe('createAffiliateHandler mobile deep links (F16)', () => {
   it('302s a mobile visitor to the deep link and logs ext:mobile/mobile-deeplink', async () => {
     const handler = createAffiliateHandler(DEEPLINK_CONFIG)
     const writeDataPoint = vi.fn()
-    const ctx = makeCtx()
+    const { ctx } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/deepProd', { country: 'DE', userAgent: IPHONE_UA }),
       { CLICKS: { writeDataPoint } },
@@ -437,7 +456,7 @@ describe('createAffiliateHandler mobile deep links (F16)', () => {
     )
     expect(response?.status).toBe(302)
     expect(response?.headers.get('location')).toBe('myapp://product/1')
-    await Promise.all(ctx.promises)
+    await waitOnExecutionContext(ctx)
     const blobs = writeDataPoint.mock.calls[0]?.[0].blobs
     expect(blobs?.[1]).toBe('ext:mobile')
     expect(blobs?.[3]).toBe('mobile-deeplink')
@@ -445,10 +464,11 @@ describe('createAffiliateHandler mobile deep links (F16)', () => {
 
   it('302s a desktop visitor to the normal Amazon redirect instead', async () => {
     const handler = createAffiliateHandler(DEEPLINK_CONFIG)
+    const { ctx } = makeCtx()
     const response = await handler(
       makeRequest('https://site.example/go/deepProd', { country: 'DE', userAgent: DESKTOP_UA }),
       {},
-      makeCtx(),
+      ctx,
     )
     expect(response?.status).toBe(302)
     expect(response?.headers.get('location')).toBe(

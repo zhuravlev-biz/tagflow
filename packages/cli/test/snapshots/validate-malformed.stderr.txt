@@ -1,0 +1,1 @@
+✗ <fixtures>/malformed.json is not valid JSON: <parse-error>

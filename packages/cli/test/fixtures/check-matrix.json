@@ -1,0 +1,10 @@
+{
+  "defaultMarketplace": "com",
+  "tags": { "com": "yourtag-20", "de": "yourtag-21" },
+  "products": {
+    "alpha": { "asin": "B000000001", "availableIn": ["com", "de"] },
+    "beta": { "asin": "B000000002", "availableIn": ["com"] },
+    "gamma": { "asin": "B000000003", "availableIn": [] },
+    "delta": { "asin": "B000000004", "availableIn": [] }
+  }
+}

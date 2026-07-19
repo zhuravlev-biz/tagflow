@@ -1,0 +1,14 @@
+checking listings with the "probe" engine…
+note: the probe fetches public /dp/ pages from YOUR machine and IP, at your discretion —
+it is rate-limited, sends no affiliate tag, and must never run from datacenter infrastructure.
+product  marketplace  asin        result   action                       
+-------  -----------  ----------  -------  -----------------------------
+alpha    com          B000000001  ok         ok                         
+beta     com          B000000002  missing  ! DEAD ON DEFAULT MARKETPLACE
+gamma    com          B000000003  unknown  ? unverified                 
+delta    com          B000000004  ok         ok                         
+alpha    de           B000000001  missing  - REMOVE (was listed!)       
+beta     de           B000000002  ok       + add                        
+gamma    de           B000000003  unknown  ? unverified                 
+delta    de           B000000004  unknown  ? unverified                 
+re-run with --write to apply 2 change(s)

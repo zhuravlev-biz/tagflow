@@ -1,0 +1,1 @@
+✓ <fixtures>/warnings.json is valid — 1 product(s), 1 tagged marketplace(s), default "com"

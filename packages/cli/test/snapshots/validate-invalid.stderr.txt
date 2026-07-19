@@ -1,0 +1,3 @@
+✗ <fixtures>/invalid.json failed validation
+  error: defaultMarketplace — default marketplace "de" has no affiliate tag in "tags" — the fallback chain must always terminate on a tagged marketplace
+  error: products.widget.asin — required unless "destination" names a retailer with a catch-all "url" — resolution must terminate for every country

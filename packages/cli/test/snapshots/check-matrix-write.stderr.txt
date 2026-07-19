@@ -1,0 +1,1 @@
+✗ 2 previously-available listing(s) disappeared — clicks are leaking

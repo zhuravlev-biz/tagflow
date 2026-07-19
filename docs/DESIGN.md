@@ -583,6 +583,12 @@ This section is a differentiator — every DIY blog post hand-waves it.
 > lint+typecheck+test and template smoke-deploy ✅ Done; cloudflare tests and
 > cli tests 🟡 Partial (equivalent coverage, different mechanism than
 > specified — see notes below); changesets release workflow ⬜ Not done.
+>
+> **Status (2026-07-19):** both mechanism gaps closed — cloudflare tests
+> migrated to the spec'd `@cloudflare/vitest-pool-workers` (real workerd
+> runtime) ✅ Done; cli snapshot tests of `validate`/`check`
+> stdout added ✅ Done. changesets release workflow remains ⬜ Not done (it is
+> release plumbing, not a test).
 
 - `core`: plain vitest; 100% branch coverage on `resolve()` is realistic and
   worth enforcing; property tests from §7; a full-ISO-coverage test for the
@@ -599,28 +605,53 @@ This section is a differentiator — every DIY blog post hand-waves it.
   100%.
 - `cloudflare`: `@cloudflare/vitest-pool-workers` (Workers runtime tests:
   route matching, mounted-mode `null` contract, headers, `waitUntil` logging;
-  simulate `request.cf` variants including missing `cf`). 🟡 Partial —
-  `packages/cloudflare/test/handler.test.ts` covers the same behaviors (route
-  matching, `null` contract, headers, `waitUntil`) but via plain vitest with
-  hand-mocked `Request`/`cf`/`ctx` objects, not an actual Workers runtime —
-  `@cloudflare/vitest-pool-workers` is not a dependency anywhere in the repo.
-  Status (2026-07-19): 29 tests after F13–F16 — choice-page rendering/
-  escaping/self-containment (`choice-page.test.ts`) and handler coverage for
-  choice responses, variant blobs, `ext:*` logging and deep-link routing.
-- `cli`: golden-file tests for `validate`/`check` output; probe engine mocked.
-  🟡 Partial — `packages/cli/test/commands.test.ts` and `engines.test.ts` are
-  thorough behavioral tests (exit codes, config diffs, mocked engines) but
-  assert on parsed state/exit codes rather than golden-file/snapshot
-  comparisons of stdout; no fixture files exist. Status (2026-07-19): the
+  simulate `request.cf` variants including missing `cf`). ✅ Done —
+  `packages/cloudflare/test/handler.test.ts` runs inside the real workerd
+  runtime via `@cloudflare/vitest-pool-workers@0.18.6` (peer-compatible with
+  the repo's `vitest@4.1.10`), wired up in `packages/cloudflare/vitest.config.ts`
+  through the package's `cloudflareTest` Vite plugin (the older
+  `defineWorkersConfig` export was dropped in 0.18.x) with
+  `@cloudflare/vitest-pool-workers/types` added to the package `tsconfig.json`.
+  Requests are built with a genuine Workers `cf` init field (including the
+  missing-`cf` case) and `waitUntil` is asserted against a real
+  `createExecutionContext()` / `waitOnExecutionContext()` rather than a
+  hand-rolled ctx. 29 tests across `handler.test.ts` and `choice-page.test.ts`
+  (choice-page rendering/escaping/self-containment; handler coverage for route
+  matching, the `null` contract, headers, `waitUntil` logging incl. swallowed
+  analytics errors, `cf` variants, choice responses, A/B variant blobs, `ext:*`
+  deep-link routing). Status (2026-07-19): before this the same behaviors were
+  covered via plain vitest with hand-mocked `Request`/`cf`/`ctx`; the
+  "different mechanism" gap is now closed. Note: `wrangler` (pulled in
+  transitively by the pool) wants `@cloudflare/workers-types@^5.20260714.1`
+  while the repo pins `5.20260711.1` identically across packages — harmless
+  (build/test/typecheck/lint all green); a repo-wide bump is a reasonable
+  follow-up.
+- `cli`: snapshots tests for `validate`/`check` output; probe engine mocked.
+  ✅ Done — `packages/cli/test/commands.test.ts` and `engines.test.ts` are
+  thorough behavioral tests (exit codes, config diffs, mocked engines) that
+  assert on parsed state/exit codes; the snapshot comparisons of
+  stdout they lacked (and the fixture files that did not exist) are now added
+  in `snapshots.test.ts` (see the final status line). Status (2026-07-19): the
   suite grew from 21 to 37 tests (`commands.test.ts` 18,
   `config-io.test.ts` 4, `engines.test.ts` 15), adding coverage for engine
   selection, the atomic config write (§10), captcha/redirect-away
-  classification in the probe engine, and a frozen golden-value test for the
-  SigV4 signer (`engines.test.ts`, "matches a frozen golden signature for a
-  fixed input") — still not golden-file/snapshot comparisons of CLI stdout,
-  so the mechanism gap noted above stands. Status (2026-07-19, `stats` +
+  classification in the probe engine, and a frozen snapshot-value test for the
+  SigV4 signer (`engines.test.ts`, "matches a frozen snapshot signature for a
+  fixed input") — at that point still not snapshot comparisons of
+  CLI stdout. Status (2026-07-19, `stats` +
   `import-earnings` landing): 66 tests across 5 files (`stats.test.ts` and
   `earnings.test.ts` added; both use an injected fake `fetch` — no network).
+  Status (2026-07-19, snapshot tests landing): the mechanism gap is now
+  closed — `packages/cli/test/snapshots.test.ts` (9 tests, suite 66 → 77)
+  captures `runValidate`/`runCheck` stdout+stderr via `console` spies and
+  compares them against committed snapshot files in
+  `packages/cli/test/snapshots/` (18 `.txt` files, stdout+stderr per
+  scenario) using `toMatchFileSnapshot`, driven by seven fixtures in
+  `packages/cli/test/fixtures/` (valid; warnings; invalid; malformed JSON; a
+  check matrix engineered to hit all six `CheckAction` variants; empty; and
+  all-clean). `check`'s engine is always a hand-built fake — no network.
+  Checkout-dependent absolute paths and the V8 `JSON.parse` error suffix are
+  normalized before comparison; no timestamps/durations appear in the output.
 - GitHub Actions: lint (Biome) + typecheck + test on PR; release
   via changesets → npm (provenance enabled); template repo smoke-deploy job
   with `wrangler deploy --dry-run`. Lint+typecheck+test ✅ Done and template
@@ -645,7 +676,7 @@ This section is a differentiator — every DIY blog post hand-waves it.
 
 | Version | Status | Scope |
 |---|---|---|
-| **v0.1** | ✅ Done | F1–F12, N1–N5; `core` + `cloudflare` + `cli init/validate/check`; standalone template + mounted Astro example; README + compliance doc. Ship when the mounted example runs on a real site. Exit criterion met — the Astro mounted example is built and runnable (`examples/astro-static-assets`). Remaining v0.1-adjacent gaps: changesets release workflow, Workers-runtime tests via `vitest-pool-workers`, and CLI golden-file tests (see §12) are not yet done but were not v0.1 MUSTs. Status (2026-07-19): the copied-out-template gap closed — `template-copyout` CI job + exact-pinned `templates/worker` deps (see §12) now prove the documented user flow works outside the workspace. |
+| **v0.1** | ✅ Done | F1–F12, N1–N5; `core` + `cloudflare` + `cli init/validate/check`; standalone template + mounted Astro example; README + compliance doc. Ship when the mounted example runs on a real site. Exit criterion met — the Astro mounted example is built and runnable (`examples/astro-static-assets`). Remaining v0.1-adjacent gaps: the changesets release workflow (see §12) is not yet done but was not a v0.1 MUST; Workers-runtime tests via `vitest-pool-workers` and CLI snapshot tests are now ✅ Done (2026-07-19, see §12). Status (2026-07-19): the copied-out-template gap closed — `template-copyout` CI job + exact-pinned `templates/worker` deps (see §12) now prove the documented user flow works outside the workspace. |
 | **v0.2** | 🟡 Feature-complete (2026-07-19) | `stats` CLI + fallback-leak report ✅; A/B variants (F13) ✅; choice pages (F14) ✅. Remaining: migrate `check`'s API engine from PA-API to the Creators API (§10, §15 — PA-API's deprecation date has passed), and the release plumbing (changesets → npm) before anything can actually ship as 0.2.0. |
 | **v0.3** | 🟡 Feature-complete (2026-07-19) | Non-Amazon destinations (F15) ✅; device routing (F16) ✅; earnings import (F17) ✅. Implemented alongside v0.2 — one config-schema change instead of two. |
 | **v1.0** | ⬜ Not started | API freeze, schema `v1` frozen, docs site. |
