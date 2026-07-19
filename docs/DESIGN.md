@@ -738,12 +738,21 @@ This section is a differentiator — every DIY blog post hand-waves it.
   --access public --no-git-checks`), `changeset tag` tags pushed, and the
   published artifacts verified from a clean consumer install: `workspace:*`
   rewritten to `0.2.0` in both dependents' tarballs, `tagflow` bin runs,
-  `core`/`cloudflare` import with expected exports; (3) ⬜ on npmjs.com, for
-  each of the three packages: Settings → Trusted publisher → GitHub Actions,
-  org `zhuravlev-biz`, repo `tagflow`, workflow `release.yml`, no
-  environment (post-2026-05-20 configs must also explicitly tick the
-  "publish" allowed action). Once (3) is done, the changesets PR → merge →
-  publish loop is fully automatic with provenance. Status (2026-07-19): a
+  `core`/`cloudflare` import with expected exports; (3) ✅ trusted
+  publishers configured on npmjs.com for each of the three packages
+  (Settings → Trusted publisher → GitHub Actions, org `zhuravlev-biz`, repo
+  `tagflow`, workflow `release.yml`, no environment, "publish" action
+  ticked). **The loop is proven end-to-end:** 0.2.1 (per-package READMEs)
+  published via OIDC on 2026-07-19, and 0.3.0 (Node ≥ 22 floor) ran the
+  entire chain hands-off — merge of the Version Packages PR → OIDC publish
+  with provenance → git tags → GitHub Releases, zero manual steps. Two
+  operational gotchas worth remembering: npm reports trusted-publishing
+  auth failures as a misleading `E404` on the `PUT`
+  ([npm/cli#9088](https://github.com/npm/cli/issues/9088)), and re-running
+  an *old* release run after workflow files changed on `main` makes the
+  tag push fail with a "workflows permission" rejection (the publish
+  itself still succeeds; the fix is pushing the tags/releases manually or
+  just publishing from `main` HEAD as the normal flow does). Status (2026-07-19): a
   `template-copyout` job was added
   (`.github/workflows/ci.yml`) that reproduces the documented user flow
   end-to-end — pack `core`/`cloudflare`/`cli` to tarballs, copy
