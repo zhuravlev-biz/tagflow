@@ -112,14 +112,14 @@ importers:
   templates/worker:
     dependencies:
       '@tagflow/cloudflare':
-        specifier: 0.1.0
+        specifier: 0.2.0
         version: link:../../packages/cloudflare
     devDependencies:
       '@cloudflare/workers-types':
         specifier: 5.20260719.1
         version: 5.20260719.1
       '@tagflow/cli':
-        specifier: 0.1.0
+        specifier: 0.2.0
         version: link:../../packages/cli
       typescript:
         specifier: 7.0.2
