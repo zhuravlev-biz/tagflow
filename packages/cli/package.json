@@ -1,6 +1,6 @@
 {
   "name": "@tagflow/cli",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "CLI for TagFlow: scaffold, validate and availability-check localized Amazon affiliate link configs.",
   "license": "MIT",
   "author": "Alex Zhuravlev",

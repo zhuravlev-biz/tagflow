@@ -1,7 +1,7 @@
 {
   "name": "tagflow-worker-template",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Standalone Cloudflare Worker for localized Amazon affiliate links — wrangler deploy and done.",
   "license": "MIT",
   "type": "module",
@@ -16,11 +16,11 @@
     "check": "tagflow check"
   },
   "dependencies": {
-    "@tagflow/cloudflare": "0.2.1"
+    "@tagflow/cloudflare": "0.3.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260719.1",
-    "@tagflow/cli": "0.2.1",
+    "@tagflow/cli": "0.3.0",
     "typescript": "7.0.2",
     "wrangler": "4.110.0"
   }
