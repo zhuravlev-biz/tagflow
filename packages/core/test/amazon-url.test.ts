@@ -149,6 +149,25 @@ describe('withAffiliateTag', () => {
     expect(result.applied).toBe(true)
   })
 
+  it('keeps the raw encoding of other params when applying', () => {
+    const result = withAffiliateTag(
+      'https://www.amazon.com/s?k=padel%20racket&rh=n%3A123',
+      config,
+    )
+    expect(result.url).toBe('https://www.amazon.com/s?k=padel%20racket&rh=n%3A123&tag=mytag-20')
+  })
+
+  it('replaces an empty tag param instead of adding a second one', () => {
+    const result = withAffiliateTag('https://www.amazon.com/dp/B0XXXXXXXX?tag=&psc=1', config)
+    expect(result.url).toBe('https://www.amazon.com/dp/B0XXXXXXXX?psc=1&tag=mytag-20')
+    expect(result.reason).toBe('applied')
+  })
+
+  it('handles a bare trailing question mark', () => {
+    const result = withAffiliateTag('https://www.amazon.com/dp/B0XXXXXXXX?', config)
+    expect(result.url).toBe('https://www.amazon.com/dp/B0XXXXXXXX?tag=mytag-20')
+  })
+
   it('leaves a URL with our own tag unchanged', () => {
     const original = 'https://www.amazon.com/dp/B0XXXXXXXX?tag=mytag-20'
     const result = withAffiliateTag(original, config)

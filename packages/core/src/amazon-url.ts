@@ -158,6 +158,15 @@ export function withAffiliateTag(url: string | URL, config: Config): AffiliateTa
     return { url: stringifyInput(url), applied: false, reason: 'has-other-tag' }
   }
 
-  parsed.urlObj.searchParams.set('tag', ourTag)
-  return { url: parsed.urlObj.href, applied: true, reason: 'applied' }
+  const target = parsed.urlObj
+  if (target.searchParams.has('tag')) {
+    // Only an empty `tag=` can reach here; drop it so Amazon cannot read the
+    // blank one first. This path re-serialises the query, which is fine.
+    target.searchParams.delete('tag')
+  }
+  // Append to the raw query rather than `searchParams.set`, which would
+  // re-serialise every other param (e.g. `%20` -> `+`).
+  const tagPair = `tag=${encodeURIComponent(ourTag)}`
+  target.search = target.search.length > 1 ? `${target.search}&${tagPair}` : `?${tagPair}`
+  return { url: target.href, applied: true, reason: 'applied' }
 }
