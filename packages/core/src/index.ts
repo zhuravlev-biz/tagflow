@@ -28,3 +28,10 @@ export {
   type ResolutionReason,
 } from './resolve.js'
 export { goUrl, goAmazonUrl, type GoUrlOptions } from './go-url.js'
+export {
+  parseAmazonUrl,
+  withAffiliateTag,
+  type AffiliateTagReason,
+  type AffiliateTagResult,
+  type ParsedAmazonUrl,
+} from './amazon-url.js'

@@ -84,6 +84,38 @@ Privacy-policy snippet you can adapt:
   Disallow: /go/
   ```
 
+## Browser extensions
+
+`@tagflow/core` ships two pure helpers (`parseAmazonUrl`, `withAffiliateTag`)
+meant for code that meets a raw Amazon URL rather than building one from a
+config — a browser extension acting on whatever page the visitor already
+has open, say. A companion extension template built on top of them lives in
+a separate repository, `zhuravlev-biz/tagflow-extension` (not yet public);
+the constraints below apply to that template and to anything else built on
+these helpers.
+
+- **Click-to-apply only.** Tags may be applied only after an explicit,
+  user-initiated action with a clear "why" — a visible button the visitor
+  chooses to click, not a background rewrite of every Amazon link on a page
+  as it loads. This is the Chrome Web Store's affiliate-link policy, not
+  just a suggestion: silently retagging links is treated as deceptive
+  installs/behavior and is grounds for removal.
+- **Never overwrite an existing tag.** `withAffiliateTag` has no option to
+  overwrite — a link that already carries a tag (yours or someone else's)
+  is always returned unchanged. Retagging another party's link is exactly
+  the "Special Links" abuse Amazon's program terms exist to prevent, and it
+  breaks attribution for whoever the visitor's click should actually credit.
+- **Enrollment is still per-marketplace.** Same rule as the Worker: a tag in
+  `withAffiliateTag`'s config only pays out where you hold an Associates
+  account for that storefront.
+- **Client-side software needs Amazon's sign-off.** The Associates Program
+  Policies restrict using Special Links inside browser extensions,
+  desktop/mobile apps, and other client-side software without Amazon's
+  prior written approval — obtained per marketplace whose Associates
+  program you're enrolled in. Treat that approval as a precondition for
+  shipping any extension built on these helpers, not paperwork to backfill
+  after launch.
+
 ## Trademark hygiene
 
 The project name contains neither "Amazon" nor "Genius"; Associates policy

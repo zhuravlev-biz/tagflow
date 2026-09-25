@@ -2,7 +2,13 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": ".",
-    "noEmit": true
+    "noEmit": true,
+    // amazon-url.ts is genuinely browser/Web-standard code (the WHATWG URL
+    // API, not a Node API) — "DOM" adds its real, accurate ambient types for
+    // our own compilation only; it is never emitted into dist, so it can't
+    // leak into consumers or weaken the "no Node APIs" guarantee elsewhere
+    // in this package.
+    "lib": ["ES2022", "DOM"]
   },
   "include": ["src", "test"]
 }

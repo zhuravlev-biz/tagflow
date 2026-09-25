@@ -51,6 +51,37 @@ matching.
   storefront that actually serves them (PT → es, IE → co.uk, NZ → com.au, …)
 - `MARKETPLACE_IDS`, `AMAZON_DOMAINS`, `isMarketplaceId` — the 21 storefronts
 - `goUrl`, `goAmazonUrl` — link builders for your site templates
+- `parseAmazonUrl`, `withAffiliateTag` — pure URL helpers for click-time
+  tagging (e.g. from a browser extension); see below
+
+### `parseAmazonUrl` / `withAffiliateTag`
+
+For code that meets a raw Amazon URL rather than building one from a
+config — a browser extension acting on the page the visitor is already on,
+say. Both are pure and dependency-free (no Node APIs; safe in a browser or
+service worker) and never throw.
+
+```ts
+import { parseAmazonUrl, withAffiliateTag } from '@tagflow/core'
+
+parseAmazonUrl('https://www.amazon.de/Some-Widget/dp/B0YYYYYYYY?tag=old-21')
+// { marketplace: 'de', asin: 'B0YYYYYYYY', tag: 'old-21' }
+
+parseAmazonUrl('https://notamazon.de/dp/B0YYYYYYYY') // null — not a real storefront
+
+withAffiliateTag('https://www.amazon.de/dp/B0YYYYYYYY', parsed.config)
+// { url: '...?tag=yourtag0d-21', applied: true, reason: 'applied' }
+```
+
+`withAffiliateTag` looks up `config.tags[marketplace]` and **never
+overwrites an existing tag** — there is no option to. `reason` is always one
+of `applied`, `has-own-tag`, `has-other-tag`, `no-tag-for-marketplace`, or
+`not-amazon`, so a caller always knows why nothing changed.
+
+These are read-only classifiers, not a policy engine: they don't decide
+*when* to tag a link. Call them only right after an explicit user action —
+see [`docs/COMPLIANCE.md`](https://github.com/zhuravlev-biz/tagflow/blob/main/docs/COMPLIANCE.md#browser-extensions)
+for why.
 
 ## Documentation
 
