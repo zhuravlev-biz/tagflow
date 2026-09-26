@@ -1,5 +1,13 @@
 # tagflow-worker-template
 
+## 0.1.4
+
+### Patch Changes
+
+- Updated dependencies [021467d]
+- Updated dependencies [437b377]
+  - @tagflow/cloudflare@0.4.0
+
 ## 0.1.3
 
 ### Patch Changes

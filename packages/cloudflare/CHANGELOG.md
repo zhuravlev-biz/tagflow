@@ -1,5 +1,19 @@
 # @tagflow/cloudflare
 
+## 0.4.0
+
+### Patch Changes
+
+- 021467d: Trim leading/trailing slashes in `goUrl`/`goAmazonUrl` and the handler's
+  route prefix with a linear scan instead of a backtracking regex. Output is
+  unchanged.
+- 437b377: Internal cleanup of the click logger and HTML escaping; logged data points
+  and rendered choice pages are unchanged.
+- Updated dependencies [593f2d7]
+- Updated dependencies [021467d]
+- Updated dependencies [0288f58]
+  - @tagflow/core@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes

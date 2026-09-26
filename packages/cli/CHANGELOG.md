@@ -1,5 +1,18 @@
 # @tagflow/cli
 
+## 0.4.0
+
+### Patch Changes
+
+- 9f34e7b: Internal cleanup of `init`, `import-earnings`, the earnings report parser and
+  the Creators API engine; command output and exit codes are unchanged.
+- 9011dfe: `tagflow check --write` sorts `availableIn` with an explicit code-unit
+  comparator instead of a bare `.sort()`. The written order is unchanged.
+- Updated dependencies [593f2d7]
+- Updated dependencies [021467d]
+- Updated dependencies [0288f58]
+  - @tagflow/core@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
