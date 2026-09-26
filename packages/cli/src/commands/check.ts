@@ -218,6 +218,16 @@ function printCheckTable(
   printTable(header, rows)
 }
 
+/**
+ * Plain UTF-16 code-unit order (what a bare `.sort()` does), spelled out so
+ * the written `availableIn` order is deterministic and locale-independent.
+ */
+function compareCodeUnits(a: string, b: string): number {
+  if (a < b) return -1
+  if (a > b) return 1
+  return 0
+}
+
 function applyToRaw(
   raw: Record<string, unknown>,
   adds: readonly { target: CheckTarget }[],
@@ -229,13 +239,13 @@ function applyToRaw(
     if (product === undefined) continue
     const current = new Set(product.availableIn ?? [])
     current.add(target.marketplace)
-    product.availableIn = [...current].sort()
+    product.availableIn = [...current].sort(compareCodeUnits)
   }
   for (const { target } of removes) {
     const product = products[target.productKey]
     if (product === undefined) continue
     product.availableIn = (product.availableIn ?? [])
       .filter((m) => m !== target.marketplace)
-      .sort()
+      .sort(compareCodeUnits)
   }
 }
