@@ -46,27 +46,10 @@ export async function runImportEarnings(argv: string[], fetchImpl?: FetchLike): 
   }
   const configPath = positionals[1] ?? DEFAULT_CONFIG_PATH
 
-  let text: string
-  try {
-    text = await readFile(reportPath, 'utf8')
-  } catch (error) {
-    const nodeError = error as NodeJS.ErrnoException
-    console.error(`✗ cannot read report file: ${reportPath} (${nodeError.message})`)
-    return 1
-  }
-
-  let config: Config
-  try {
-    const loaded = await loadConfigFile(configPath)
-    config = loaded.config
-  } catch (error) {
-    if (error instanceof ConfigError) {
-      console.error(`✗ ${error.message}`)
-      printIssues(error.issues, 'error')
-      return 1
-    }
-    throw error
-  }
+  const text = await readReportFile(reportPath)
+  if (text === undefined) return 1
+  const config = await loadConfigOrReport(configPath)
+  if (config === undefined) return 1
 
   const parsed = parseEarningsReport(text)
   if (parsed.rows.length === 0) {
@@ -99,12 +82,7 @@ export async function runImportEarnings(argv: string[], fetchImpl?: FetchLike): 
     totals: tagTotals,
   }))
 
-  let minDate = parsed.rows[0]?.date ?? ''
-  let maxDate = minDate
-  for (const row of parsed.rows) {
-    if (row.date < minDate) minDate = row.date
-    if (row.date > maxDate) maxDate = row.date
-  }
+  const { minDate, maxDate } = dateRange(parsed.rows)
 
   // A malformed --dataset is caller error and fails hard, matching `stats`.
   // Environmental problems (missing credentials, API errors) degrade to the
@@ -117,37 +95,89 @@ export async function runImportEarnings(argv: string[], fetchImpl?: FetchLike): 
     return 1
   }
 
-  const clicksByMarketplace = new Map<string, number>()
-  if (values['no-clicks']) {
-    console.log('note: --no-clicks — showing earnings only')
-  } else {
-    const credentials = credentialsFromEnv()
-    if (credentials === undefined) {
-      console.log(
-        'note: CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN not set — showing earnings only (no clicks column); set them to see clicks',
-      )
-    } else {
-      const sql = `SELECT blob2 AS marketplace, SUM(_sample_interval) AS clicks FROM ${dataset} WHERE timestamp >= toDateTime('${minDate} 00:00:00') AND timestamp <= toDateTime('${maxDate} 23:59:59') GROUP BY marketplace FORMAT JSON`
-      try {
-        const result = await aeQuery(credentials, sql, fetchImpl)
-        for (const row of result.rows) {
-          const marketplace = String(row['marketplace'] ?? '')
-          if (marketplace === '') continue
-          clicksByMarketplace.set(marketplace, Number(row['clicks'] ?? 0))
-        }
-      } catch (error) {
-        if (error instanceof AeError) {
-          console.error(`  warning: could not fetch click data: ${error.message} — showing earnings only`)
-        } else {
-          throw error
-        }
-      }
-    }
-  }
+  const clicksByMarketplace = values['no-clicks']
+    ? noClicks()
+    : await fetchClicksByMarketplace(dataset, minDate, maxDate, fetchImpl)
 
   printReportTable(rows, clicksByMarketplace)
 
   return 0
+}
+
+/** Reads the report CSV; `undefined` after reporting an unreadable file. */
+async function readReportFile(reportPath: string): Promise<string | undefined> {
+  try {
+    return await readFile(reportPath, 'utf8')
+  } catch (error) {
+    const nodeError = error as NodeJS.ErrnoException
+    console.error(`✗ cannot read report file: ${reportPath} (${nodeError.message})`)
+    return undefined
+  }
+}
+
+/** Loads the config; `undefined` after reporting validation errors. */
+async function loadConfigOrReport(configPath: string): Promise<Config | undefined> {
+  try {
+    const loaded = await loadConfigFile(configPath)
+    return loaded.config
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      console.error(`✗ ${error.message}`)
+      printIssues(error.issues, 'error')
+      return undefined
+    }
+    throw error
+  }
+}
+
+/** Earliest and latest `YYYY-MM-DD` date across the parsed report rows. */
+function dateRange(rows: readonly { readonly date: string }[]): { minDate: string; maxDate: string } {
+  let minDate = rows[0]?.date ?? ''
+  let maxDate = minDate
+  for (const row of rows) {
+    if (row.date < minDate) minDate = row.date
+    if (row.date > maxDate) maxDate = row.date
+  }
+  return { minDate, maxDate }
+}
+
+function noClicks(): Map<string, number> {
+  console.log('note: --no-clicks — showing earnings only')
+  return new Map()
+}
+
+/**
+ * Click totals per marketplace (blob2) over the report's date range.
+ * Environmental problems (missing credentials, API errors) degrade to an
+ * empty map — the earnings-only view is still useful.
+ */
+async function fetchClicksByMarketplace(
+  dataset: string,
+  minDate: string,
+  maxDate: string,
+  fetchImpl: FetchLike | undefined,
+): Promise<Map<string, number>> {
+  const clicksByMarketplace = new Map<string, number>()
+  const credentials = credentialsFromEnv()
+  if (credentials === undefined) {
+    console.log(
+      'note: CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN not set — showing earnings only (no clicks column); set them to see clicks',
+    )
+    return clicksByMarketplace
+  }
+  const sql = `SELECT blob2 AS marketplace, SUM(_sample_interval) AS clicks FROM ${dataset} WHERE timestamp >= toDateTime('${minDate} 00:00:00') AND timestamp <= toDateTime('${maxDate} 23:59:59') GROUP BY marketplace FORMAT JSON`
+  try {
+    const result = await aeQuery(credentials, sql, fetchImpl)
+    for (const row of result.rows) {
+      const marketplace = String(row['marketplace'] ?? '')
+      if (marketplace === '') continue
+      clicksByMarketplace.set(marketplace, Number(row['clicks'] ?? 0))
+    }
+  } catch (error) {
+    if (!(error instanceof AeError)) throw error
+    console.error(`  warning: could not fetch click data: ${error.message} — showing earnings only`)
+  }
+  return clicksByMarketplace
 }
 
 function printReportTable(
@@ -161,8 +191,8 @@ function printReportTable(
     // when one tag maps to several marketplaces we don't know which
     // marketplace's clicks "belong" to the tag's orders.
     const single = r.marketplaces.length === 1 ? r.marketplaces[0] : undefined
-    const clicks = single !== undefined ? clicksByMarketplace.get(single) : undefined
-    const clicksCell = clicks !== undefined ? String(clicks) : '—'
+    const clicks = single === undefined ? undefined : clicksByMarketplace.get(single)
+    const clicksCell = clicks === undefined ? '—' : String(clicks)
     const convCell =
       clicks !== undefined && clicks > 0
         ? `${((r.totals.orders / clicks) * 100).toFixed(1)}%`

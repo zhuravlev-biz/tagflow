@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { stdin, stdout } from 'node:process'
-import { createInterface } from 'node:readline/promises'
+import { createInterface, type Interface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
 import { isMarketplaceId, MARKETPLACE_IDS, parseConfig } from '@tagflow/core'
 import { DEFAULT_CONFIG_PATH, printIssues, writeConfigFile } from '../config-io.js'
@@ -29,6 +29,61 @@ Add products to "products" in the config, then link to them as /go/<key>
 after every edit.
 `
 
+/** Parses repeated `--tag <marketplace>=<tag>` flags; `undefined` after reporting a malformed pair. */
+function parseTagPairs(pairs: readonly string[]): Record<string, string> | undefined {
+  const tags: Record<string, string> = {}
+  for (const pair of pairs) {
+    const eq = pair.indexOf('=')
+    if (eq <= 0) {
+      console.error(`✗ --tag expects <marketplace>=<tag>, got "${pair}"`)
+      return undefined
+    }
+    tags[pair.slice(0, eq)] = pair.slice(eq + 1)
+  }
+  return tags
+}
+
+async function promptExtraTags(rl: Interface, tags: Record<string, string>): Promise<void> {
+  for (;;) {
+    const marketplace = (
+      await rl.question('Add another tagged marketplace (empty to finish): ')
+    ).trim()
+    if (marketplace === '') return
+    if (!isMarketplaceId(marketplace)) {
+      console.log(`  "${marketplace}" is not a known marketplace, try again.`)
+      continue
+    }
+    tags[marketplace] = (await rl.question(`Associates tag for "${marketplace}": `)).trim()
+  }
+}
+
+/**
+ * Interactively asks for whatever the flags did not provide. Fills `tags` in
+ * place and returns the default marketplace.
+ */
+async function promptForMissing(
+  initialDefault: string | undefined,
+  tags: Record<string, string>,
+): Promise<string> {
+  const rl = createInterface({ input: stdin, output: stdout })
+  try {
+    console.log(`Marketplaces: ${MARKETPLACE_IDS.join(', ')}\n`)
+    let defaultMarketplace = initialDefault
+    while (defaultMarketplace === undefined) {
+      const answer = (await rl.question('Default marketplace (e.g. "com", "de"): ')).trim()
+      if (isMarketplaceId(answer)) defaultMarketplace = answer
+      else console.log(`  "${answer}" is not a known marketplace, try again.`)
+    }
+    tags[defaultMarketplace] ??= (
+      await rl.question(`Associates tag for "${defaultMarketplace}": `)
+    ).trim()
+    await promptExtraTags(rl, tags)
+    return defaultMarketplace
+  } finally {
+    rl.close()
+  }
+}
+
 export async function runInit(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
@@ -46,54 +101,21 @@ export async function runInit(argv: string[]): Promise<number> {
     return 1
   }
 
-  let defaultMarketplace = values.default
-  const tags: Record<string, string> = {}
-  for (const pair of values.tag ?? []) {
-    const eq = pair.indexOf('=')
-    if (eq <= 0) {
-      console.error(`✗ --tag expects <marketplace>=<tag>, got "${pair}"`)
-      return 1
-    }
-    tags[pair.slice(0, eq)] = pair.slice(eq + 1)
-  }
+  const tags = parseTagPairs(values.tag ?? [])
+  if (tags === undefined) return 1
 
   // Anything not provided via flags is asked interactively.
-  if (defaultMarketplace === undefined || Object.keys(tags).length === 0) {
-    if (!stdin.isTTY) {
-      console.error(
-        '✗ missing --default and/or --tag, and stdin is not a terminal to prompt for them',
-      )
-      console.error('  pass them as flags, e.g.: tagflow init --default com --tag com=yourtag-21')
-      return 1
-    }
-    const rl = createInterface({ input: stdin, output: stdout })
-    try {
-      console.log(`Marketplaces: ${MARKETPLACE_IDS.join(', ')}\n`)
-      while (defaultMarketplace === undefined) {
-        const answer = (await rl.question('Default marketplace (e.g. "com", "de"): ')).trim()
-        if (isMarketplaceId(answer)) defaultMarketplace = answer
-        else console.log(`  "${answer}" is not a known marketplace, try again.`)
-      }
-      if (tags[defaultMarketplace] === undefined) {
-        tags[defaultMarketplace] = (
-          await rl.question(`Associates tag for "${defaultMarketplace}": `)
-        ).trim()
-      }
-      for (;;) {
-        const marketplace = (
-          await rl.question('Add another tagged marketplace (empty to finish): ')
-        ).trim()
-        if (marketplace === '') break
-        if (!isMarketplaceId(marketplace)) {
-          console.log(`  "${marketplace}" is not a known marketplace, try again.`)
-          continue
-        }
-        tags[marketplace] = (await rl.question(`Associates tag for "${marketplace}": `)).trim()
-      }
-    } finally {
-      rl.close()
-    }
+  const needsPrompt = values.default === undefined || Object.keys(tags).length === 0
+  if (needsPrompt && !stdin.isTTY) {
+    console.error(
+      '✗ missing --default and/or --tag, and stdin is not a terminal to prompt for them',
+    )
+    console.error('  pass them as flags, e.g.: tagflow init --default com --tag com=yourtag-21')
+    return 1
   }
+  const defaultMarketplace = needsPrompt
+    ? await promptForMissing(values.default, tags)
+    : values.default
 
   const raw = {
     defaultMarketplace,

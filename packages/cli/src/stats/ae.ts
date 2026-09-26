@@ -48,7 +48,7 @@ export function credentialsFromEnv(): AeCredentials | undefined {
  * no bind parameters), so restrict them to a safe shape instead of quoting.
  */
 export function isSafeDatasetName(name: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
+  return /^[A-Za-z_]\w*$/.test(name)
 }
 
 /**

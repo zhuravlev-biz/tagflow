@@ -7,10 +7,20 @@ export interface GoUrlOptions {
   readonly prefix?: string
 }
 
+/**
+ * Strips trailing `/` characters. A linear scan rather than a `/\/+$/`
+ * regex, which backtracks quadratically on long runs of slashes.
+ */
+function trimTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value[end - 1] === '/') end--
+  return value.slice(0, end)
+}
+
 function joinUrl(base: string | undefined, prefix: string, segment: string): string {
-  const cleanBase = base === undefined ? '' : base.replace(/\/+$/, '')
+  const cleanBase = base === undefined ? '' : trimTrailingSlashes(base)
   const cleanPrefix = prefix.startsWith('/') ? prefix : `/${prefix}`
-  return `${cleanBase}${cleanPrefix.replace(/\/+$/, '')}/${segment}`
+  return `${cleanBase}${trimTrailingSlashes(cleanPrefix)}/${segment}`
 }
 
 /**

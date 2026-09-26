@@ -48,17 +48,13 @@ function tokenizeLine(line: string, delimiter: string): string[] {
   let inQuotes = false
   for (let i = 0; i < line.length; i++) {
     const ch = line[i]
-    if (inQuotes) {
-      if (ch === '"') {
-        if (line[i + 1] === '"') {
-          cur += '"'
-          i++
-        } else {
-          inQuotes = false
-        }
-      } else {
-        cur += ch
-      }
+    if (inQuotes && ch === '"' && line[i + 1] === '"') {
+      cur += '"'
+      i++
+    } else if (inQuotes && ch === '"') {
+      inQuotes = false
+    } else if (inQuotes) {
+      cur += ch
     } else if (ch === '"' && cur === '') {
       inQuotes = true
     } else if (ch === delimiter) {
@@ -125,36 +121,48 @@ function isValidDate(y: number, m: number, d: number): boolean {
 function parseReportDate(raw: string): string | undefined {
   const s = raw.trim()
   if (s === '') return undefined
+  // The three shapes are mutually exclusive, so at most one parser matches.
+  return parseIsoDate(s) ?? parseMonthNameDate(s) ?? parseSlashDate(s)
+}
 
-  // Group access uses `?? ''` instead of assertions: every group below is
-  // non-optional in its pattern, so the fallback is unreachable, but this
-  // keeps noUncheckedIndexedAccess honest without `as` escape hatches.
-  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
-  if (m) {
-    const [y, mo, d] = [m[1] ?? '', m[2] ?? '', m[3] ?? '']
-    return isValidDate(Number(y), Number(mo), Number(d)) ? `${y}-${mo}-${d}` : undefined
-  }
+// Group access below uses `?? ''` instead of assertions: every group is
+// non-optional in its pattern, so the fallback is unreachable, but this keeps
+// noUncheckedIndexedAccess honest without `as` escape hatches.
 
-  m = /^([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})$/.exec(s)
-  if (m) {
-    const month = MONTHS[(m[1] ?? '').toLowerCase()]
-    if (month === undefined) return undefined
-    const y = Number(m[3] ?? '')
-    const d = Number(m[2] ?? '')
-    return isValidDate(y, month, d) ? `${y}-${pad2(month)}-${pad2(d)}` : undefined
-  }
+/** 'YYYY-MM-DD'. */
+function parseIsoDate(s: string): string | undefined {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
+  if (!m) return undefined
+  const [y, mo, d] = [m[1] ?? '', m[2] ?? '', m[3] ?? '']
+  return isValidDate(Number(y), Number(mo), Number(d)) ? `${y}-${mo}-${d}` : undefined
+}
 
-  m = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec(s)
-  if (m) {
-    const yr = m[3] ?? ''
-    const twoDigit = Number(yr)
-    const year = yr.length === 2 ? (twoDigit <= 69 ? 2000 + twoDigit : 1900 + twoDigit) : Number(yr)
-    const month = Number(m[1] ?? '')
-    const day = Number(m[2] ?? '')
-    return isValidDate(year, month, day) ? `${year}-${pad2(month)}-${pad2(day)}` : undefined
-  }
+/** 'Month DD, YYYY' (English month names, full or abbreviated). */
+function parseMonthNameDate(s: string): string | undefined {
+  const m = /^([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})$/.exec(s)
+  if (!m) return undefined
+  const month = MONTHS[(m[1] ?? '').toLowerCase()]
+  if (month === undefined) return undefined
+  const y = Number(m[3] ?? '')
+  const d = Number(m[2] ?? '')
+  return isValidDate(y, month, d) ? `${y}-${pad2(month)}-${pad2(d)}` : undefined
+}
 
-  return undefined
+/** Two-digit years pivot at 69: 00–69 → 2000s, 70–99 → 1900s. */
+function expandYear(yr: string): number {
+  const n = Number(yr)
+  if (yr.length !== 2) return n
+  return n <= 69 ? 2000 + n : 1900 + n
+}
+
+/** 'MM/DD/YY' and 'MM/DD/YYYY'. */
+function parseSlashDate(s: string): string | undefined {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec(s)
+  if (!m) return undefined
+  const year = expandYear(m[3] ?? '')
+  const month = Number(m[1] ?? '')
+  const day = Number(m[2] ?? '')
+  return isValidDate(year, month, day) ? `${year}-${pad2(month)}-${pad2(day)}` : undefined
 }
 
 /**
@@ -169,7 +177,7 @@ function parseReportDate(raw: string): string | undefined {
 export function parseAmount(raw: string): number {
   const trimmed = raw.trim()
   if (trimmed === '') return 0
-  let s = trimmed.replace(/[^0-9.,-]/g, '')
+  let s = trimmed.replaceAll(/[^0-9.,-]/g, '')
   if (s === '' || s === '-') return 0
 
   const lastComma = s.lastIndexOf(',')
@@ -178,12 +186,12 @@ export function parseAmount(raw: string): number {
     const fractional = s.slice(lastComma + 1)
     if (/^\d{2}$/.test(fractional)) {
       // European decimal comma: dots before it are thousands separators.
-      s = `${s.slice(0, lastComma).replace(/\./g, '')}.${fractional}`
+      s = `${s.slice(0, lastComma).replaceAll('.', '')}.${fractional}`
     } else {
-      s = s.replace(/,/g, '')
+      s = s.replaceAll(',', '')
     }
   } else {
-    s = s.replace(/,/g, '')
+    s = s.replaceAll(',', '')
   }
 
   const n = Number(s)
@@ -197,46 +205,14 @@ export function parseAmount(raw: string): number {
 export function parseEarningsReport(text: string): ParsedReport {
   const lines = text.split(/\r\n|\r|\n/)
 
-  let headerIndex = -1
-  let delimiter = ','
-  let headerCells: string[] = []
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? ''
-    if (line.trim() === '') continue
-    const tentativeDelimiter = line.includes('\t') ? '\t' : ','
-    const cells = tokenizeLine(line, tentativeDelimiter)
-    if (cells.some((cell) => cell.trim().toLowerCase().includes(HEADER_MARKER))) {
-      headerIndex = i
-      delimiter = tentativeDelimiter
-      headerCells = cells
-      break
-    }
+  const header = findHeader(lines)
+  if (header === undefined) {
+    return { rows: [], skipped: 0, issues: [noHeaderIssue(lines)] }
   }
 
-  if (headerIndex === -1) {
-    const firstLine = lines.find((l) => l.trim() !== '') ?? ''
-    const tentativeDelimiter = firstLine.includes('\t') ? '\t' : ','
-    const seen = tokenizeLine(firstLine, tentativeDelimiter)
-      .map((c) => c.trim())
-      .filter((c) => c !== '')
-    return {
-      rows: [],
-      skipped: 0,
-      issues: [
-        `no header row found: expected a column containing "tracking" (e.g. "Tracking Id"); headers seen: ${
-          seen.length > 0 ? seen.join(', ') : '(none)'
-        }`,
-      ],
-    }
-  }
-
-  const normalized = headerCells.map((c) => c.trim().toLowerCase())
+  const normalized = header.cells.map((c) => c.trim().toLowerCase())
   const trackingIdx = findColumn(normalized, ['tracking'])
   const dateIdx = findColumn(normalized, ['date shipped', 'shipment date', 'order date', 'date'])
-  const itemsIdx = findColumn(normalized, ['items shipped', 'quantity', 'qty', 'items'])
-  const earningsIdx = findColumn(normalized, ['ad fees', 'advertising fee', 'fees', 'earnings', 'commission'])
-  const revenueIdx = findColumn(normalized, ['revenue', 'price'])
-  const asinIdx = findColumn(normalized, ['asin'])
 
   if (trackingIdx === undefined || dateIdx === undefined) {
     const missing = [
@@ -247,40 +223,94 @@ export function parseEarningsReport(text: string): ParsedReport {
       rows: [],
       skipped: 0,
       issues: [
-        `could not find required column(s): ${missing.join(', ')}; headers seen: ${headerCells
+        `could not find required column(s): ${missing.join(', ')}; headers seen: ${header.cells
           .map((c) => c.trim())
           .join(', ')}`,
       ],
     }
   }
 
+  const columns: ReportColumns = {
+    tracking: trackingIdx,
+    date: dateIdx,
+    items: findColumn(normalized, ['items shipped', 'quantity', 'qty', 'items']),
+    earnings: findColumn(normalized, ['ad fees', 'advertising fee', 'fees', 'earnings', 'commission']),
+    revenue: findColumn(normalized, ['revenue', 'price']),
+    asin: findColumn(normalized, ['asin']),
+  }
+
   const rows: EarningsRow[] = []
   let skipped = 0
-  for (let i = headerIndex + 1; i < lines.length; i++) {
+  for (let i = header.index + 1; i < lines.length; i++) {
     const line = lines[i] ?? ''
     if (line.trim() === '') continue
-    const cells = tokenizeLine(line, delimiter)
-    const tag = (cells[trackingIdx] ?? '').trim()
-    const date = parseReportDate(cells[dateIdx] ?? '')
-    if (tag === '' || date === undefined) {
-      skipped++
-      continue
-    }
-    const items = itemsIdx !== undefined ? parseAmount(cells[itemsIdx] ?? '') : 0
-    const earnings = earningsIdx !== undefined ? parseAmount(cells[earningsIdx] ?? '') : 0
-    const revenue = revenueIdx !== undefined ? parseAmount(cells[revenueIdx] ?? '') : 0
-    const asin = asinIdx !== undefined ? (cells[asinIdx] ?? '').trim() : ''
-    rows.push({
-      tag,
-      date,
-      items,
-      earnings,
-      revenue,
-      ...(asin !== '' ? { asin } : {}),
-    })
+    const row = parseRow(tokenizeLine(line, header.delimiter), columns)
+    if (row === undefined) skipped++
+    else rows.push(row)
   }
 
   return { rows, skipped, issues: [] }
+}
+
+interface ReportHeader {
+  readonly index: number
+  readonly delimiter: string
+  readonly cells: readonly string[]
+}
+
+/** First non-blank line with a cell containing HEADER_MARKER; the delimiter is sniffed per line. */
+function findHeader(lines: readonly string[]): ReportHeader | undefined {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? ''
+    if (line.trim() === '') continue
+    const delimiter = line.includes('\t') ? '\t' : ','
+    const cells = tokenizeLine(line, delimiter)
+    if (cells.some((cell) => cell.trim().toLowerCase().includes(HEADER_MARKER))) {
+      return { index: i, delimiter, cells }
+    }
+  }
+  return undefined
+}
+
+function noHeaderIssue(lines: readonly string[]): string {
+  const firstLine = lines.find((l) => l.trim() !== '') ?? ''
+  const tentativeDelimiter = firstLine.includes('\t') ? '\t' : ','
+  const seen = tokenizeLine(firstLine, tentativeDelimiter)
+    .map((c) => c.trim())
+    .filter((c) => c !== '')
+  return `no header row found: expected a column containing "tracking" (e.g. "Tracking Id"); headers seen: ${
+    seen.length > 0 ? seen.join(', ') : '(none)'
+  }`
+}
+
+/** Column indexes; the optional ones are `undefined` when the report lacks them. */
+interface ReportColumns {
+  readonly tracking: number
+  readonly date: number
+  readonly items: number | undefined
+  readonly earnings: number | undefined
+  readonly revenue: number | undefined
+  readonly asin: number | undefined
+}
+
+function amountAt(cells: readonly string[], index: number | undefined): number {
+  return index === undefined ? 0 : parseAmount(cells[index] ?? '')
+}
+
+/** One data row; `undefined` when it has no tracking tag or an unparseable date. */
+function parseRow(cells: readonly string[], columns: ReportColumns): EarningsRow | undefined {
+  const tag = (cells[columns.tracking] ?? '').trim()
+  const date = parseReportDate(cells[columns.date] ?? '')
+  if (tag === '' || date === undefined) return undefined
+  const asin = columns.asin === undefined ? '' : (cells[columns.asin] ?? '').trim()
+  return {
+    tag,
+    date,
+    items: amountAt(cells, columns.items),
+    earnings: amountAt(cells, columns.earnings),
+    revenue: amountAt(cells, columns.revenue),
+    ...(asin === '' ? {} : { asin }),
+  }
 }
 
 /** Aggregate parsed rows per tracking tag (F17's clicks-vs-orders view is keyed by tag). */

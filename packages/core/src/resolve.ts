@@ -137,7 +137,7 @@ function candidateForCountry(
   config: Config,
 ): { marketplace: MarketplaceId; unknownCountry: boolean } {
   const normalized = country?.toUpperCase()
-  const overridden = normalized !== undefined ? config.countryOverrides[normalized] : undefined
+  const overridden = normalized === undefined ? undefined : config.countryOverrides[normalized]
   const mapped = overridden ?? marketplaceForCountry(normalized)
   if (mapped !== undefined) return { marketplace: mapped, unknownCountry: false }
   return { marketplace: config.defaultMarketplace, unknownCountry: true }
@@ -149,7 +149,7 @@ function localizedUrl(
   country: string | undefined,
 ): string | undefined {
   if (dest === undefined) return undefined
-  const byCountry = country !== undefined ? dest.urlByCountry?.[country] : undefined
+  const byCountry = country === undefined ? undefined : dest.urlByCountry?.[country]
   return byCountry ?? dest.url
 }
 
@@ -176,7 +176,7 @@ function selectVariant(
     if (target < cumulative) return { name, config: variant }
   }
   // Floating-point edge (target === total): last entry.
-  const last = entries[entries.length - 1]
+  const last = entries.at(-1)
   return last === undefined ? undefined : { name: last[0], config: last[1] }
 }
 
@@ -222,6 +222,9 @@ function resolveCurated(productKey: string, ctx: ClickContext, config: Config): 
   return amazonWaterfall(product, productKey, country, ctx.random, config)
 }
 
+/** The first waterfall gate a candidate marketplace failed: no affiliate tag, or listing not available. */
+type GateFailure = 'no-tag' | 'unavailable'
+
 /**
  * The tag/availability waterfall (F1–F5) with A/B variant overlay (F13).
  * A variant's `asin`/`asinByMarketplace` replace the base fields wholesale —
@@ -245,7 +248,7 @@ function amazonWaterfall(
   // there. The default marketplace skips the availability gate — products
   // are assumed available there (F3/F5).
   const availability = new Set(product.availableIn ?? [])
-  const failureOf = (marketplace: MarketplaceId): 'no-tag' | 'unavailable' | undefined => {
+  const failureOf = (marketplace: MarketplaceId): GateFailure | undefined => {
     if (config.tags[marketplace] === undefined) return 'no-tag'
     if (marketplace !== config.defaultMarketplace && !availability.has(marketplace)) {
       return 'unavailable'
@@ -255,21 +258,14 @@ function amazonWaterfall(
 
   const chain = fallbackChain(candidate, config)
 
-  let firstFailure: 'no-tag' | 'unavailable' | undefined
+  let firstFailure: GateFailure | undefined
   for (const marketplace of chain) {
     const failure = failureOf(marketplace)
     if (failure !== undefined) {
       firstFailure ??= failure
       continue
     }
-    const reason: ResolutionReason =
-      firstFailure === 'no-tag'
-        ? 'fallback-no-tag'
-        : firstFailure === 'unavailable'
-          ? 'fallback-unavailable'
-          : unknownCountry
-            ? 'unknown-country'
-            : 'direct'
+    const reason = resolutionReasonFor(firstFailure, unknownCountry)
     return redirectDecision(product, productKey, marketplace, reason, variant, config)
   }
 
@@ -286,6 +282,16 @@ function amazonWaterfall(
   )
 }
 
+/** Why the waterfall landed where it did, given the first gate that failed (if any). */
+function resolutionReasonFor(
+  firstFailure: GateFailure | undefined,
+  unknownCountry: boolean,
+): ResolutionReason {
+  if (firstFailure === 'no-tag') return 'fallback-no-tag'
+  if (firstFailure === 'unavailable') return 'fallback-unavailable'
+  return unknownCountry ? 'unknown-country' : 'direct'
+}
+
 function redirectDecision(
   product: ProductConfig,
   productKey: string,
@@ -295,10 +301,7 @@ function redirectDecision(
   config: Config,
 ): Decision {
   const baseAsin = variant?.config.asin ?? product.asin ?? ''
-  const asinByMarketplace =
-    variant?.config.asinByMarketplace !== undefined
-      ? variant.config.asinByMarketplace
-      : product.asinByMarketplace
+  const asinByMarketplace = variant?.config.asinByMarketplace ?? product.asinByMarketplace
   const asin = asinByMarketplace?.[marketplace] ?? baseAsin
   const tag = config.tags[marketplace] ?? config.tags[config.defaultMarketplace] ?? ''
   return {
@@ -307,7 +310,7 @@ function redirectDecision(
     marketplace,
     resolutionReason,
     productKey,
-    ...(variant !== undefined ? { variant: variant.name } : {}),
+    ...(variant === undefined ? {} : { variant: variant.name }),
   }
 }
 

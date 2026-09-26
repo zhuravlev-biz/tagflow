@@ -12,15 +12,15 @@ export default defineConfig({
         // + parseConfig), even with hand-built Config objects that bypass
         // parseConfig's validation — they guard invariants only the module's
         // own private call sites already enforce:
-        //  - selectVariant's `last === undefined` ternary (line ~178): dead
+        //  - selectVariant's `last === undefined` ternary (line ~180): dead
         //    because `entries.length > 0` is already checked above it, so
         //    `entries[entries.length - 1]` is always defined.
-        //  - redirectDecision's `product.asin ?? ''` fallback (line ~295):
+        //  - redirectDecision's `product.asin ?? ''` fallback (line ~303):
         //    dead because redirectDecision (not exported) is only ever
         //    called from amazonWaterfall after its own
         //    `product.asin === undefined` guard has already returned.
         //  - choiceDecision's `amazon.type === 'redirect'` check (line
-        //    ~326): dead because amazonWaterfall only returns a non-redirect
+        //    ~331): dead because amazonWaterfall only returns a non-redirect
         //    (not-found) Decision when product.asin is undefined, and this
         //    call site is itself guarded by `product.asin !== undefined`.
         'src/resolve.ts': {

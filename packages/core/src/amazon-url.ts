@@ -91,8 +91,8 @@ function parseAmazonUrlInternal(url: string | URL): ParsedAmazonUrlInternal | nu
 
   return {
     marketplace,
-    ...(asin !== undefined ? { asin } : {}),
-    ...(tag !== undefined ? { tag } : {}),
+    ...(asin === undefined ? {} : { asin }),
+    ...(tag === undefined ? {} : { tag }),
     urlObj: parsed,
   }
 }
@@ -115,8 +115,8 @@ export function parseAmazonUrl(url: string | URL): ParsedAmazonUrl | null {
   if (parsed === null) return null
   return {
     marketplace: parsed.marketplace,
-    ...(parsed.asin !== undefined ? { asin: parsed.asin } : {}),
-    ...(parsed.tag !== undefined ? { tag: parsed.tag } : {}),
+    ...(parsed.asin === undefined ? {} : { asin: parsed.asin }),
+    ...(parsed.tag === undefined ? {} : { tag: parsed.tag }),
   }
 }
 

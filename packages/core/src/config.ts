@@ -217,6 +217,501 @@ function parseUrlByCountry(
   return result
 }
 
+const URL_SAFE_RULE = 'letters, digits, ".", "_", "~", "-" (must start and end alphanumeric)'
+
+function parseTags(
+  raw: unknown,
+  err: IssueSink,
+  warn: IssueSink,
+): Partial<Record<MarketplaceId, string>> {
+  const tags: Partial<Record<MarketplaceId, string>> = {}
+  if (!isRecord(raw)) {
+    err('tags', 'must be an object mapping marketplace → affiliate tag')
+    return tags
+  }
+  for (const [marketplace, tag] of Object.entries(raw)) {
+    const path = `tags.${marketplace}`
+    if (!isMarketplaceId(marketplace)) {
+      err(path, `unknown marketplace ${JSON.stringify(marketplace)}`)
+      continue
+    }
+    if (typeof tag !== 'string' || tag.length === 0) {
+      err(path, 'affiliate tag must be a non-empty string')
+      continue
+    }
+    if (!TAG_SHAPE_RE.test(tag)) {
+      warn(
+        path,
+        `${JSON.stringify(tag)} does not look like a typical Associates tag (expected e.g. "yourtag-21"); double-check it`,
+      )
+    }
+    tags[marketplace] = tag
+  }
+  return tags
+}
+
+function parseCountryOverrides(
+  raw: unknown,
+  err: IssueSink,
+  warn: IssueSink,
+): Partial<Record<string, MarketplaceId>> {
+  const countryOverrides: Partial<Record<string, MarketplaceId>> = {}
+  if (!isRecord(raw)) {
+    err('countryOverrides', 'must be an object mapping ISO country code → marketplace')
+    return countryOverrides
+  }
+  for (const [country, marketplace] of Object.entries(raw)) {
+    const path = `countryOverrides.${country}`
+    if (!/^[A-Z]{2}$/.test(country)) {
+      err(path, 'country codes must be two uppercase letters (ISO 3166-1 alpha-2)')
+      continue
+    }
+    if (!ISO_SET.has(country)) {
+      warn(path, `${JSON.stringify(country)} is not an assigned ISO 3166-1 alpha-2 code`)
+    }
+    if (!isMarketplaceId(marketplace)) {
+      err(path, `unknown marketplace ${JSON.stringify(marketplace)}`)
+      continue
+    }
+    countryOverrides[country] = marketplace
+  }
+  return countryOverrides
+}
+
+/**
+ * Reject cycles (a → b, b → a). Resolution only ever takes one fallback hop,
+ * but a cyclic config is always a mistake worth failing loudly on.
+ * `reported` tracks every node already accounted for by a reported cycle so a
+ * 2-cycle like {de: 'fr', fr: 'de'} is flagged once, not twice.
+ */
+function reportFallbackCycles(
+  marketplaceFallbacks: Partial<Record<MarketplaceId, MarketplaceId>>,
+  err: IssueSink,
+): void {
+  const reported = new Set<MarketplaceId>()
+  for (const start of Object.keys(marketplaceFallbacks) as MarketplaceId[]) {
+    if (reported.has(start)) continue
+    const seen = new Set<MarketplaceId>([start])
+    let current = marketplaceFallbacks[start]
+    while (current !== undefined) {
+      if (seen.has(current)) {
+        err(`marketplaceFallbacks.${start}`, `fallback chain starting at "${start}" is cyclic`)
+        for (const node of seen) reported.add(node)
+        break
+      }
+      seen.add(current)
+      current = marketplaceFallbacks[current]
+    }
+  }
+}
+
+function parseMarketplaceFallbacks(
+  raw: unknown,
+  err: IssueSink,
+): Partial<Record<MarketplaceId, MarketplaceId>> {
+  const marketplaceFallbacks: Partial<Record<MarketplaceId, MarketplaceId>> = {}
+  if (!isRecord(raw)) {
+    err('marketplaceFallbacks', 'must be an object mapping marketplace → fallback marketplace')
+    return marketplaceFallbacks
+  }
+  for (const [from, to] of Object.entries(raw)) {
+    const path = `marketplaceFallbacks.${from}`
+    if (!isMarketplaceId(from)) {
+      err(path, `unknown marketplace ${JSON.stringify(from)}`)
+      continue
+    }
+    if (!isMarketplaceId(to)) {
+      err(path, `unknown fallback marketplace ${JSON.stringify(to)}`)
+      continue
+    }
+    if (from === to) {
+      err(path, 'a marketplace cannot fall back to itself')
+      continue
+    }
+    marketplaceFallbacks[from] = to
+  }
+  reportFallbackCycles(marketplaceFallbacks, err)
+  return marketplaceFallbacks
+}
+
+/** `valid: false` means an error was reported and the enclosing entry must be skipped. */
+type OptionalAsinResult = { readonly valid: false } | { readonly valid: true; readonly asin?: string }
+
+function parseOptionalAsin(
+  raw: unknown,
+  path: string,
+  shapeHint: string,
+  err: IssueSink,
+  warn: IssueSink,
+): OptionalAsinResult {
+  if (raw === undefined) return { valid: true }
+  if (typeof raw !== 'string' || raw.length === 0) {
+    err(path, 'must be a non-empty string')
+    return { valid: false }
+  }
+  if (!ASIN_RE.test(raw)) {
+    warn(path, `${JSON.stringify(raw)} does not look like an ASIN${shapeHint}`)
+  }
+  return { valid: true, asin: raw }
+}
+
+function parseAvailableIn(raw: unknown, path: string, err: IssueSink): MarketplaceId[] {
+  const availableIn: MarketplaceId[] = []
+  if (!Array.isArray(raw)) {
+    err(`${path}.availableIn`, 'must be an array of marketplace ids')
+    return availableIn
+  }
+  raw.forEach((marketplace, index) => {
+    if (!isMarketplaceId(marketplace)) {
+      err(`${path}.availableIn[${index}]`, `unknown marketplace ${JSON.stringify(marketplace)}`)
+      return
+    }
+    availableIn.push(marketplace)
+  })
+  return availableIn
+}
+
+function parseVariant(
+  name: string,
+  rawVariant: unknown,
+  variantPath: string,
+  err: IssueSink,
+  warn: IssueSink,
+): VariantConfig | undefined {
+  if (!PRODUCT_KEY_RE.test(name)) {
+    err(variantPath, `variant names must be URL-safe: ${URL_SAFE_RULE}`)
+    return undefined
+  }
+  if (!isRecord(rawVariant)) {
+    err(variantPath, 'must be an object with at least a positive "weight"')
+    return undefined
+  }
+  const weight = rawVariant['weight']
+  if (typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0) {
+    err(`${variantPath}.weight`, 'must be a finite number greater than 0')
+    return undefined
+  }
+  const variantAsin = parseOptionalAsin(rawVariant['asin'], `${variantPath}.asin`, '', err, warn)
+  if (!variantAsin.valid) return undefined
+  const variantAsinBy = parseAsinByMarketplace(
+    rawVariant['asinByMarketplace'],
+    `${variantPath}.asinByMarketplace`,
+    err,
+    warn,
+  )
+  return {
+    weight,
+    ...(variantAsin.asin === undefined ? {} : { asin: variantAsin.asin }),
+    ...(rawVariant['asinByMarketplace'] === undefined ? {} : { asinByMarketplace: variantAsinBy }),
+  }
+}
+
+/** Variants (F13). */
+function parseVariants(
+  raw: unknown,
+  path: string,
+  asin: string | undefined,
+  err: IssueSink,
+  warn: IssueSink,
+): Record<string, VariantConfig> {
+  const variants: Record<string, VariantConfig> = {}
+  if (raw === undefined) return variants
+  if (!isRecord(raw)) {
+    err(`${path}.variants`, 'must be an object mapping variant name → { weight, asin?, asinByMarketplace? }')
+    return variants
+  }
+  for (const [name, rawVariant] of Object.entries(raw)) {
+    const variant = parseVariant(name, rawVariant, `${path}.variants.${name}`, err, warn)
+    if (variant !== undefined) variants[name] = variant
+  }
+  const count = Object.keys(variants).length
+  if (count === 1) {
+    warn(`${path}.variants`, 'only one variant configured — every click gets it, which measures nothing')
+  }
+  if (count > 0 && asin === undefined) {
+    err(`${path}.variants`, 'variants adjust Amazon ASINs and require a base "asin"')
+  }
+  return variants
+}
+
+function parseRetailer(
+  retailerKey: string,
+  rawRetailer: unknown,
+  retailerPath: string,
+  err: IssueSink,
+  warn: IssueSink,
+): RetailerConfig | undefined {
+  if (retailerKey.toLowerCase() === 'amazon') {
+    err(retailerPath, '"amazon" is reserved for the built-in Amazon entry')
+    return undefined
+  }
+  if (!PRODUCT_KEY_RE.test(retailerKey)) {
+    err(retailerPath, `retailer keys must be URL-safe: ${URL_SAFE_RULE}`)
+    return undefined
+  }
+  if (!isRecord(rawRetailer)) {
+    err(retailerPath, 'must be an object with a "label" and a "url" and/or "urlByCountry"')
+    return undefined
+  }
+  const label = rawRetailer['label']
+  if (typeof label !== 'string' || label.length === 0) {
+    err(`${retailerPath}.label`, 'must be a non-empty string')
+    return undefined
+  }
+  const url = parseDestinationUrl(rawRetailer['url'], `${retailerPath}.url`, 'web', err, warn)
+  const urlByCountry = parseUrlByCountry(
+    rawRetailer['urlByCountry'],
+    `${retailerPath}.urlByCountry`,
+    'web',
+    err,
+    warn,
+  )
+  if (url === undefined && Object.keys(urlByCountry).length === 0) {
+    err(retailerPath, 'needs a catch-all "url" and/or at least one "urlByCountry" entry')
+    return undefined
+  }
+  return {
+    label,
+    ...(url === undefined ? {} : { url }),
+    ...(rawRetailer['urlByCountry'] === undefined ? {} : { urlByCountry }),
+  }
+}
+
+/** Retailers (F15). */
+function parseRetailers(
+  raw: unknown,
+  path: string,
+  err: IssueSink,
+  warn: IssueSink,
+): Record<string, RetailerConfig> {
+  const retailers: Record<string, RetailerConfig> = {}
+  if (raw === undefined) return retailers
+  if (!isRecord(raw)) {
+    err(`${path}.retailers`, 'must be an object mapping retailer key → { label, url?, urlByCountry? }')
+    return retailers
+  }
+  for (const [retailerKey, rawRetailer] of Object.entries(raw)) {
+    const retailer = parseRetailer(retailerKey, rawRetailer, `${path}.retailers.${retailerKey}`, err, warn)
+    if (retailer !== undefined) retailers[retailerKey] = retailer
+  }
+  return retailers
+}
+
+/** Destination (F15): `"amazon"` or a key of this product's retailers. */
+function parseProductDestination(
+  raw: unknown,
+  path: string,
+  retailers: Readonly<Record<string, RetailerConfig>>,
+  err: IssueSink,
+): string | undefined {
+  if (raw === undefined) return undefined
+  if (typeof raw !== 'string') {
+    err(`${path}.destination`, 'must be "amazon" or a key from this product\'s "retailers"')
+    return undefined
+  }
+  if (raw !== 'amazon' && retailers[raw] === undefined) {
+    err(`${path}.destination`, `${JSON.stringify(raw)} is not a key in this product's "retailers"`)
+    return undefined
+  }
+  return raw
+}
+
+function parseMobileDeepLink(
+  rawMobile: unknown,
+  mobilePath: string,
+  err: IssueSink,
+  warn: IssueSink,
+): MobileDeepLink | undefined {
+  if (!isRecord(rawMobile)) {
+    err(mobilePath, 'must be an object with a "url" and/or "urlByCountry"')
+    return undefined
+  }
+  const url = parseDestinationUrl(rawMobile['url'], `${mobilePath}.url`, 'any', err, warn)
+  const urlByCountry = parseUrlByCountry(
+    rawMobile['urlByCountry'],
+    `${mobilePath}.urlByCountry`,
+    'any',
+    err,
+    warn,
+  )
+  if (url === undefined && Object.keys(urlByCountry).length === 0) {
+    err(mobilePath, 'needs a "url" and/or at least one "urlByCountry" entry')
+    return undefined
+  }
+  return {
+    ...(url === undefined ? {} : { url }),
+    ...(rawMobile['urlByCountry'] === undefined ? {} : { urlByCountry }),
+  }
+}
+
+/** Deep links (F16). */
+function parseDeepLinks(
+  raw: unknown,
+  path: string,
+  err: IssueSink,
+  warn: IssueSink,
+): ProductConfig['deepLinks'] {
+  if (raw === undefined) return undefined
+  if (!isRecord(raw)) {
+    err(`${path}.deepLinks`, 'must be an object like { "mobile": { "url": "…" } }')
+    return undefined
+  }
+  for (const deepLinkKey of Object.keys(raw)) {
+    if (deepLinkKey !== 'mobile') {
+      warn(`${path}.deepLinks.${deepLinkKey}`, 'unknown deep-link key (only "mobile" is supported)')
+    }
+  }
+  const rawMobile = raw['mobile']
+  if (rawMobile === undefined) return undefined
+  const mobile = parseMobileDeepLink(rawMobile, `${path}.deepLinks.mobile`, err, warn)
+  return mobile === undefined ? undefined : { mobile }
+}
+
+/** The validated pieces of one product entry, before invariant checks. */
+interface ProductParts {
+  readonly path: string
+  readonly asin: string | undefined
+  readonly asinByMarketplace: Partial<Record<MarketplaceId, string>>
+  readonly availableIn: readonly MarketplaceId[]
+  readonly retailers: Readonly<Record<string, RetailerConfig>>
+  readonly destination: string | undefined
+  readonly choice: boolean
+}
+
+/**
+ * Termination invariants for a product without an `asin`: /go/<key> must
+ * resolve to a destination for every possible visitor country (F3's
+ * guarantee extended to F14/F15).
+ */
+function checkAsinlessProduct(parts: ProductParts, err: IssueSink): void {
+  const { path, retailers, choice } = parts
+  const effectiveDestination = parts.destination ?? 'amazon'
+  const destinationHasCatchAll =
+    effectiveDestination !== 'amazon' && retailers[effectiveDestination]?.url !== undefined
+  if (!destinationHasCatchAll && !choice) {
+    err(
+      `${path}.asin`,
+      'required unless "destination" names a retailer with a catch-all "url" — resolution must terminate for every country',
+    )
+  }
+  if (parts.availableIn.length > 0) {
+    err(`${path}.availableIn`, 'has no effect without an "asin"')
+  }
+  if (Object.keys(parts.asinByMarketplace).length > 0) {
+    err(`${path}.asinByMarketplace`, 'has no effect without an "asin"')
+  }
+}
+
+/** Choice-page (F14) sanity checks. */
+function checkChoicePage(parts: ProductParts, err: IssueSink, warn: IssueSink): void {
+  const { path, asin, retailers, destination } = parts
+  const catchAllRetailers = Object.values(retailers).filter((r) => r.url !== undefined)
+  if (asin === undefined && catchAllRetailers.length === 0) {
+    err(
+      `${path}.choice`,
+      'a choice page needs an "asin" or at least one retailer with a catch-all "url" so every visitor sees at least one link',
+    )
+  }
+  const possibleEntries = (asin === undefined ? 0 : 1) + Object.keys(retailers).length
+  if (possibleEntries < 2) {
+    warn(`${path}.choice`, 'a choice page with fewer than two destinations is just a slower redirect')
+  }
+  if (destination !== undefined && destination !== 'amazon') {
+    warn(
+      `${path}.destination`,
+      'ignored while "choice" is true — the choice page is rendered instead of redirecting',
+    )
+  }
+}
+
+function checkProductKey(key: string, path: string, err: IssueSink): boolean {
+  if (RESERVED_PRODUCT_KEYS.includes(key.toLowerCase())) {
+    err(path, `"${key}" is a reserved route segment and cannot be a product key`)
+    return false
+  }
+  if (!PRODUCT_KEY_RE.test(key)) {
+    err(path, `product keys must be URL-safe: ${URL_SAFE_RULE}`)
+    return false
+  }
+  return true
+}
+
+function parseProduct(
+  key: string,
+  rawProduct: unknown,
+  err: IssueSink,
+  warn: IssueSink,
+): ProductConfig | undefined {
+  const path = `products.${key}`
+  if (!checkProductKey(key, path, err)) return undefined
+  if (!isRecord(rawProduct)) {
+    err(path, 'must be an object with at least an "asin"')
+    return undefined
+  }
+
+  const parsedAsin = parseOptionalAsin(
+    rawProduct['asin'],
+    `${path}.asin`,
+    ' (10 chars, A–Z/0–9)',
+    err,
+    warn,
+  )
+  if (!parsedAsin.valid) return undefined
+  const { asin } = parsedAsin
+
+  const asinByMarketplace = parseAsinByMarketplace(
+    rawProduct['asinByMarketplace'],
+    `${path}.asinByMarketplace`,
+    err,
+    warn,
+  )
+  const availableIn = parseAvailableIn(rawProduct['availableIn'] ?? [], path, err)
+  const variants = parseVariants(rawProduct['variants'], path, asin, err, warn)
+  const retailers = parseRetailers(rawProduct['retailers'], path, err, warn)
+  const destination = parseProductDestination(rawProduct['destination'], path, retailers, err)
+
+  // choice (F14)
+  const rawChoice = rawProduct['choice']
+  if (rawChoice !== undefined && typeof rawChoice !== 'boolean') {
+    err(`${path}.choice`, 'must be a boolean')
+  }
+  const choice = rawChoice === true
+
+  const deepLinks = parseDeepLinks(rawProduct['deepLinks'], path, err, warn)
+
+  const parts: ProductParts = { path, asin, asinByMarketplace, availableIn, retailers, destination, choice }
+  if (asin === undefined) checkAsinlessProduct(parts, err)
+  if (choice) checkChoicePage(parts, err, warn)
+
+  return {
+    ...(asin === undefined ? {} : { asin }),
+    asinByMarketplace,
+    availableIn,
+    ...(Object.keys(variants).length > 0 ? { variants } : {}),
+    ...(Object.keys(retailers).length > 0 ? { retailers } : {}),
+    ...(destination === undefined ? {} : { destination }),
+    ...(choice ? { choice } : {}),
+    ...(deepLinks === undefined ? {} : { deepLinks }),
+  }
+}
+
+function parseProducts(
+  raw: unknown,
+  err: IssueSink,
+  warn: IssueSink,
+): Record<string, ProductConfig> {
+  const products: Record<string, ProductConfig> = {}
+  if (!isRecord(raw)) {
+    err('products', 'must be an object mapping product key → product entry')
+    return products
+  }
+  for (const [key, rawProduct] of Object.entries(raw)) {
+    const product = parseProduct(key, rawProduct, err, warn)
+    if (product !== undefined) products[key] = product
+  }
+  return products
+}
+
 /**
  * Validate raw JSON into a `Config`. Errors are precise and fail the parse;
  * warnings flag suspicious-but-legal values (tag shape, unknown country
@@ -236,7 +731,6 @@ export function parseConfig(input: unknown): ParseConfigResult {
     return { ok: false, errors: [{ path: '', message: 'config must be a JSON object' }] }
   }
 
-  // defaultMarketplace
   const defaultMarketplace = input['defaultMarketplace']
   if (!isMarketplaceId(defaultMarketplace)) {
     err(
@@ -245,32 +739,8 @@ export function parseConfig(input: unknown): ParseConfigResult {
     )
   }
 
-  // tags
-  const tags: Partial<Record<MarketplaceId, string>> = {}
   const rawTags = input['tags']
-  if (!isRecord(rawTags)) {
-    err('tags', 'must be an object mapping marketplace → affiliate tag')
-  } else {
-    for (const [marketplace, tag] of Object.entries(rawTags)) {
-      const path = `tags.${marketplace}`
-      if (!isMarketplaceId(marketplace)) {
-        err(path, `unknown marketplace ${JSON.stringify(marketplace)}`)
-        continue
-      }
-      if (typeof tag !== 'string' || tag.length === 0) {
-        err(path, 'affiliate tag must be a non-empty string')
-        continue
-      }
-      if (!TAG_SHAPE_RE.test(tag)) {
-        warn(
-          path,
-          `${JSON.stringify(tag)} does not look like a typical Associates tag (expected e.g. "yourtag-21"); double-check it`,
-        )
-      }
-      tags[marketplace] = tag
-    }
-  }
-
+  const tags = parseTags(rawTags, err, warn)
   if (
     isMarketplaceId(defaultMarketplace) &&
     isRecord(rawTags) &&
@@ -282,370 +752,15 @@ export function parseConfig(input: unknown): ParseConfigResult {
     )
   }
 
-  // countryOverrides
-  const countryOverrides: Partial<Record<string, MarketplaceId>> = {}
-  const rawOverrides = input['countryOverrides'] ?? {}
-  if (!isRecord(rawOverrides)) {
-    err('countryOverrides', 'must be an object mapping ISO country code → marketplace')
-  } else {
-    for (const [country, marketplace] of Object.entries(rawOverrides)) {
-      const path = `countryOverrides.${country}`
-      if (!/^[A-Z]{2}$/.test(country)) {
-        err(path, 'country codes must be two uppercase letters (ISO 3166-1 alpha-2)')
-        continue
-      }
-      if (!ISO_SET.has(country)) {
-        warn(path, `${JSON.stringify(country)} is not an assigned ISO 3166-1 alpha-2 code`)
-      }
-      if (!isMarketplaceId(marketplace)) {
-        err(path, `unknown marketplace ${JSON.stringify(marketplace)}`)
-        continue
-      }
-      countryOverrides[country] = marketplace
-    }
-  }
+  const countryOverrides = parseCountryOverrides(input['countryOverrides'] ?? {}, err, warn)
+  const marketplaceFallbacks = parseMarketplaceFallbacks(input['marketplaceFallbacks'] ?? {}, err)
 
-  // marketplaceFallbacks
-  const marketplaceFallbacks: Partial<Record<MarketplaceId, MarketplaceId>> = {}
-  const rawFallbacks = input['marketplaceFallbacks'] ?? {}
-  if (!isRecord(rawFallbacks)) {
-    err('marketplaceFallbacks', 'must be an object mapping marketplace → fallback marketplace')
-  } else {
-    for (const [from, to] of Object.entries(rawFallbacks)) {
-      const path = `marketplaceFallbacks.${from}`
-      if (!isMarketplaceId(from)) {
-        err(path, `unknown marketplace ${JSON.stringify(from)}`)
-        continue
-      }
-      if (!isMarketplaceId(to)) {
-        err(path, `unknown fallback marketplace ${JSON.stringify(to)}`)
-        continue
-      }
-      if (from === to) {
-        err(path, 'a marketplace cannot fall back to itself')
-        continue
-      }
-      marketplaceFallbacks[from] = to
-    }
-    // Reject cycles (a → b, b → a). Resolution only ever takes one fallback
-    // hop, but a cyclic config is always a mistake worth failing loudly on.
-    // `reported` tracks every node already accounted for by a reported cycle
-    // so a 2-cycle like {de: 'fr', fr: 'de'} is flagged once, not twice.
-    const reported = new Set<MarketplaceId>()
-    for (const start of Object.keys(marketplaceFallbacks) as MarketplaceId[]) {
-      if (reported.has(start)) continue
-      const seen = new Set<MarketplaceId>([start])
-      let current = marketplaceFallbacks[start]
-      while (current !== undefined) {
-        if (seen.has(current)) {
-          err(
-            `marketplaceFallbacks.${start}`,
-            `fallback chain starting at "${start}" is cyclic`,
-          )
-          for (const node of seen) reported.add(node)
-          break
-        }
-        seen.add(current)
-        current = marketplaceFallbacks[current]
-      }
-    }
-  }
-
-  // unknownAsin
   const unknownAsin = input['unknownAsin'] ?? 'default'
   if (unknownAsin !== 'geo' && unknownAsin !== 'default') {
     err('unknownAsin', `must be "geo" or "default" (got ${JSON.stringify(unknownAsin)})`)
   }
 
-  // products
-  const products: Record<string, ProductConfig> = {}
-  const rawProducts = input['products'] ?? {}
-  if (!isRecord(rawProducts)) {
-    err('products', 'must be an object mapping product key → product entry')
-  } else {
-    for (const [key, rawProduct] of Object.entries(rawProducts)) {
-      const path = `products.${key}`
-      if (RESERVED_PRODUCT_KEYS.includes(key.toLowerCase())) {
-        err(path, `"${key}" is a reserved route segment and cannot be a product key`)
-        continue
-      }
-      if (!PRODUCT_KEY_RE.test(key)) {
-        err(
-          path,
-          'product keys must be URL-safe: letters, digits, ".", "_", "~", "-" (must start and end alphanumeric)',
-        )
-        continue
-      }
-      if (!isRecord(rawProduct)) {
-        err(path, 'must be an object with at least an "asin"')
-        continue
-      }
-
-      const rawAsin = rawProduct['asin']
-      let asin: string | undefined
-      if (rawAsin !== undefined) {
-        if (typeof rawAsin !== 'string' || rawAsin.length === 0) {
-          err(`${path}.asin`, 'must be a non-empty string')
-          continue
-        }
-        asin = rawAsin
-        if (!ASIN_RE.test(asin)) {
-          warn(`${path}.asin`, `${JSON.stringify(asin)} does not look like an ASIN (10 chars, A–Z/0–9)`)
-        }
-      }
-
-      const asinByMarketplace = parseAsinByMarketplace(
-        rawProduct['asinByMarketplace'],
-        `${path}.asinByMarketplace`,
-        err,
-        warn,
-      )
-
-      const availableIn: MarketplaceId[] = []
-      const rawAvailableIn = rawProduct['availableIn'] ?? []
-      if (!Array.isArray(rawAvailableIn)) {
-        err(`${path}.availableIn`, 'must be an array of marketplace ids')
-      } else {
-        rawAvailableIn.forEach((marketplace, index) => {
-          if (!isMarketplaceId(marketplace)) {
-            err(`${path}.availableIn[${index}]`, `unknown marketplace ${JSON.stringify(marketplace)}`)
-            return
-          }
-          availableIn.push(marketplace)
-        })
-      }
-
-      // variants (F13)
-      const variants: Record<string, VariantConfig> = {}
-      const rawVariants = rawProduct['variants']
-      if (rawVariants !== undefined) {
-        if (!isRecord(rawVariants)) {
-          err(`${path}.variants`, 'must be an object mapping variant name → { weight, asin?, asinByMarketplace? }')
-        } else {
-          for (const [name, rawVariant] of Object.entries(rawVariants)) {
-            const variantPath = `${path}.variants.${name}`
-            if (!PRODUCT_KEY_RE.test(name)) {
-              err(
-                variantPath,
-                'variant names must be URL-safe: letters, digits, ".", "_", "~", "-" (must start and end alphanumeric)',
-              )
-              continue
-            }
-            if (!isRecord(rawVariant)) {
-              err(variantPath, 'must be an object with at least a positive "weight"')
-              continue
-            }
-            const weight = rawVariant['weight']
-            if (typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0) {
-              err(`${variantPath}.weight`, 'must be a finite number greater than 0')
-              continue
-            }
-            const rawVariantAsin = rawVariant['asin']
-            let variantAsin: string | undefined
-            if (rawVariantAsin !== undefined) {
-              if (typeof rawVariantAsin !== 'string' || rawVariantAsin.length === 0) {
-                err(`${variantPath}.asin`, 'must be a non-empty string')
-                continue
-              }
-              variantAsin = rawVariantAsin
-              if (!ASIN_RE.test(variantAsin)) {
-                warn(`${variantPath}.asin`, `${JSON.stringify(variantAsin)} does not look like an ASIN`)
-              }
-            }
-            const variantAsinBy = parseAsinByMarketplace(
-              rawVariant['asinByMarketplace'],
-              `${variantPath}.asinByMarketplace`,
-              err,
-              warn,
-            )
-            variants[name] = {
-              weight,
-              ...(variantAsin !== undefined ? { asin: variantAsin } : {}),
-              ...(rawVariant['asinByMarketplace'] !== undefined
-                ? { asinByMarketplace: variantAsinBy }
-                : {}),
-            }
-          }
-          if (Object.keys(variants).length === 1) {
-            warn(
-              `${path}.variants`,
-              'only one variant configured — every click gets it, which measures nothing',
-            )
-          }
-          if (Object.keys(variants).length > 0 && asin === undefined) {
-            err(`${path}.variants`, 'variants adjust Amazon ASINs and require a base "asin"')
-          }
-        }
-      }
-
-      // retailers (F15)
-      const retailers: Record<string, RetailerConfig> = {}
-      const rawRetailers = rawProduct['retailers']
-      if (rawRetailers !== undefined) {
-        if (!isRecord(rawRetailers)) {
-          err(
-            `${path}.retailers`,
-            'must be an object mapping retailer key → { label, url?, urlByCountry? }',
-          )
-        } else {
-          for (const [retailerKey, rawRetailer] of Object.entries(rawRetailers)) {
-            const retailerPath = `${path}.retailers.${retailerKey}`
-            if (retailerKey.toLowerCase() === 'amazon') {
-              err(retailerPath, '"amazon" is reserved for the built-in Amazon entry')
-              continue
-            }
-            if (!PRODUCT_KEY_RE.test(retailerKey)) {
-              err(
-                retailerPath,
-                'retailer keys must be URL-safe: letters, digits, ".", "_", "~", "-" (must start and end alphanumeric)',
-              )
-              continue
-            }
-            if (!isRecord(rawRetailer)) {
-              err(retailerPath, 'must be an object with a "label" and a "url" and/or "urlByCountry"')
-              continue
-            }
-            const label = rawRetailer['label']
-            if (typeof label !== 'string' || label.length === 0) {
-              err(`${retailerPath}.label`, 'must be a non-empty string')
-              continue
-            }
-            const url = parseDestinationUrl(rawRetailer['url'], `${retailerPath}.url`, 'web', err, warn)
-            const urlByCountry = parseUrlByCountry(
-              rawRetailer['urlByCountry'],
-              `${retailerPath}.urlByCountry`,
-              'web',
-              err,
-              warn,
-            )
-            if (url === undefined && Object.keys(urlByCountry).length === 0) {
-              err(retailerPath, 'needs a catch-all "url" and/or at least one "urlByCountry" entry')
-              continue
-            }
-            retailers[retailerKey] = {
-              label,
-              ...(url !== undefined ? { url } : {}),
-              ...(rawRetailer['urlByCountry'] !== undefined ? { urlByCountry } : {}),
-            }
-          }
-        }
-      }
-
-      // destination (F15)
-      const rawDestination = rawProduct['destination']
-      let destination: string | undefined
-      if (rawDestination !== undefined) {
-        if (typeof rawDestination !== 'string') {
-          err(`${path}.destination`, 'must be "amazon" or a key from this product\'s "retailers"')
-        } else if (rawDestination !== 'amazon' && retailers[rawDestination] === undefined) {
-          err(
-            `${path}.destination`,
-            `${JSON.stringify(rawDestination)} is not a key in this product's "retailers"`,
-          )
-        } else {
-          destination = rawDestination
-        }
-      }
-
-      // choice (F14)
-      const rawChoice = rawProduct['choice']
-      if (rawChoice !== undefined && typeof rawChoice !== 'boolean') {
-        err(`${path}.choice`, 'must be a boolean')
-      }
-      const choice = rawChoice === true
-
-      // deepLinks (F16)
-      const rawDeepLinks = rawProduct['deepLinks']
-      let deepLinks: ProductConfig['deepLinks']
-      if (rawDeepLinks !== undefined) {
-        if (!isRecord(rawDeepLinks)) {
-          err(`${path}.deepLinks`, 'must be an object like { "mobile": { "url": "…" } }')
-        } else {
-          for (const deepLinkKey of Object.keys(rawDeepLinks)) {
-            if (deepLinkKey !== 'mobile') {
-              warn(`${path}.deepLinks.${deepLinkKey}`, 'unknown deep-link key (only "mobile" is supported)')
-            }
-          }
-          const rawMobile = rawDeepLinks['mobile']
-          if (rawMobile !== undefined) {
-            const mobilePath = `${path}.deepLinks.mobile`
-            if (!isRecord(rawMobile)) {
-              err(mobilePath, 'must be an object with a "url" and/or "urlByCountry"')
-            } else {
-              const url = parseDestinationUrl(rawMobile['url'], `${mobilePath}.url`, 'any', err, warn)
-              const urlByCountry = parseUrlByCountry(
-                rawMobile['urlByCountry'],
-                `${mobilePath}.urlByCountry`,
-                'any',
-                err,
-                warn,
-              )
-              if (url === undefined && Object.keys(urlByCountry).length === 0) {
-                err(mobilePath, 'needs a "url" and/or at least one "urlByCountry" entry')
-              } else {
-                deepLinks = {
-                  mobile: {
-                    ...(url !== undefined ? { url } : {}),
-                    ...(rawMobile['urlByCountry'] !== undefined ? { urlByCountry } : {}),
-                  },
-                }
-              }
-            }
-          }
-        }
-      }
-
-      // Termination invariants: /go/<key> must resolve to a destination for
-      // every possible visitor country (F3's guarantee extended to F14/F15).
-      const effectiveDestination = destination ?? 'amazon'
-      const destinationHasCatchAll =
-        effectiveDestination !== 'amazon' && retailers[effectiveDestination]?.url !== undefined
-      if (rawAsin === undefined) {
-        if (!destinationHasCatchAll && !choice) {
-          err(
-            `${path}.asin`,
-            'required unless "destination" names a retailer with a catch-all "url" — resolution must terminate for every country',
-          )
-        }
-        if (availableIn.length > 0) {
-          err(`${path}.availableIn`, 'has no effect without an "asin"')
-        }
-        if (Object.keys(asinByMarketplace).length > 0) {
-          err(`${path}.asinByMarketplace`, 'has no effect without an "asin"')
-        }
-      }
-      if (choice) {
-        const catchAllRetailers = Object.values(retailers).filter((r) => r.url !== undefined)
-        if (asin === undefined && catchAllRetailers.length === 0) {
-          err(
-            `${path}.choice`,
-            'a choice page needs an "asin" or at least one retailer with a catch-all "url" so every visitor sees at least one link',
-          )
-        }
-        const possibleEntries = (asin !== undefined ? 1 : 0) + Object.keys(retailers).length
-        if (possibleEntries < 2) {
-          warn(`${path}.choice`, 'a choice page with fewer than two destinations is just a slower redirect')
-        }
-        if (destination !== undefined && destination !== 'amazon') {
-          warn(
-            `${path}.destination`,
-            'ignored while "choice" is true — the choice page is rendered instead of redirecting',
-          )
-        }
-      }
-
-      products[key] = {
-        ...(asin !== undefined ? { asin } : {}),
-        asinByMarketplace,
-        availableIn,
-        ...(Object.keys(variants).length > 0 ? { variants } : {}),
-        ...(Object.keys(retailers).length > 0 ? { retailers } : {}),
-        ...(destination !== undefined ? { destination } : {}),
-        ...(choice ? { choice } : {}),
-        ...(deepLinks !== undefined ? { deepLinks } : {}),
-      }
-    }
-  }
+  const products = parseProducts(input['products'] ?? {}, err, warn)
 
   if (errors.length > 0) {
     return { ok: false, errors }

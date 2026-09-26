@@ -21,6 +21,14 @@ export interface EngineIo {
   readonly onWarn?: (message: string) => void
 }
 
+function markAll(
+  results: Map<string, ListingStatus>,
+  asins: readonly string[],
+  status: ListingStatus,
+): void {
+  for (const asin of asins) results.set(asin, status)
+}
+
 const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 /** Amazon serves these on captcha/robot-check interstitials — always with HTTP 200. */
@@ -182,67 +190,80 @@ export function createCreatorsApiEngine(
     }
   }
 
+  /**
+   * One GetItems call for up to 10 ASINs, written into `results`. Every
+   * failure mode (non-200/404 status, network error) degrades the whole
+   * batch to 'unknown'.
+   */
+  async function checkBatch(
+    request: { readonly marketplace: MarketplaceId; readonly partnerTag: string; readonly token: string },
+    batch: readonly string[],
+    results: Map<string, ListingStatus>,
+  ): Promise<void> {
+    const { marketplace, partnerTag, token } = request
+    const marketplaceDomain = AMAZON_DOMAINS[marketplace]
+    const body = JSON.stringify({
+      itemIds: batch,
+      itemIdType: 'ASIN',
+      partnerTag,
+      partnerType: 'Associates',
+      marketplace: marketplaceDomain,
+      // resources omitted: the server defaults to ["itemInfo.title"],
+      // which is all we need to confirm the ASIN resolves to a live item.
+    })
+
+    try {
+      const response = await fetchFn(CREATORS_API_GETITEMS_URL, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`,
+          'x-marketplace': marketplaceDomain,
+        },
+        body,
+      })
+      if (response.status !== 200 && response.status !== 404) {
+        // Auth/throttle problems affect the whole batch.
+        onWarn?.(`creatorsapi ${marketplace}: HTTP ${response.status}`)
+        markAll(results, batch, 'unknown')
+        return
+      }
+      const payload = (await response.json()) as CreatorsApiGetItemsResponse
+      const found = new Set(
+        (payload.itemsResult?.items ?? [])
+          .map((item) => item.asin)
+          .filter((asin): asin is string => typeof asin === 'string'),
+      )
+      for (const asin of batch) {
+        // Unknown/unbuyable ASINs are reported via `errors` + omission
+        // from `itemsResult` — both mean the listing is dead for linking.
+        results.set(asin, found.has(asin) ? 'ok' : 'missing')
+      }
+    } catch (error) {
+      onWarn?.(`creatorsapi ${marketplace}: ${(error as Error).message}`)
+      markAll(results, batch, 'unknown')
+    }
+  }
+
   return {
     name: 'creatorsapi',
     async check(marketplace, asins) {
       const results = new Map<string, ListingStatus>()
       const partnerTag = credentials.partnerTagFor(marketplace)
       if (partnerTag === undefined) {
-        for (const asin of asins) results.set(asin, 'unknown')
+        markAll(results, asins, 'unknown')
         return results
       }
 
       const token = await getToken()
       if (token === undefined) {
-        for (const asin of asins) results.set(asin, 'unknown')
+        markAll(results, asins, 'unknown')
         return results
       }
 
-      const marketplaceDomain = AMAZON_DOMAINS[marketplace]
       for (let i = 0; i < asins.length; i += 10) {
         if (i > 0) await sleep(delayMs)
-        const batch = asins.slice(i, i + 10)
-        const body = JSON.stringify({
-          itemIds: batch,
-          itemIdType: 'ASIN',
-          partnerTag,
-          partnerType: 'Associates',
-          marketplace: marketplaceDomain,
-          // resources omitted: the server defaults to ["itemInfo.title"],
-          // which is all we need to confirm the ASIN resolves to a live item.
-        })
-
-        try {
-          const response = await fetchFn(CREATORS_API_GETITEMS_URL, {
-            method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-              authorization: `Bearer ${token}`,
-              'x-marketplace': marketplaceDomain,
-            },
-            body,
-          })
-          if (response.status !== 200 && response.status !== 404) {
-            // Auth/throttle problems affect the whole batch.
-            onWarn?.(`creatorsapi ${marketplace}: HTTP ${response.status}`)
-            for (const asin of batch) results.set(asin, 'unknown')
-            continue
-          }
-          const payload = (await response.json()) as CreatorsApiGetItemsResponse
-          const found = new Set(
-            (payload.itemsResult?.items ?? [])
-              .map((item) => item.asin)
-              .filter((asin): asin is string => typeof asin === 'string'),
-          )
-          for (const asin of batch) {
-            // Unknown/unbuyable ASINs are reported via `errors` + omission
-            // from `itemsResult` — both mean the listing is dead for linking.
-            results.set(asin, found.has(asin) ? 'ok' : 'missing')
-          }
-        } catch (error) {
-          onWarn?.(`creatorsapi ${marketplace}: ${(error as Error).message}`)
-          for (const asin of batch) results.set(asin, 'unknown')
-        }
+        await checkBatch({ marketplace, partnerTag, token }, asins.slice(i, i + 10), results)
       }
       return results
     },
