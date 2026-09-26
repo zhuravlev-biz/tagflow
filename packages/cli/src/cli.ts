@@ -60,10 +60,9 @@ async function main(): Promise<number> {
   }
 }
 
-main().then(
-  (code) => exit(code),
-  (error) => {
-    console.error(error)
-    exit(1)
-  },
-)
+try {
+  exit(await main())
+} catch (error) {
+  console.error(error)
+  exit(1)
+}
