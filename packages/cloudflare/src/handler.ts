@@ -157,6 +157,17 @@ function isAnalyticsDataset(value: unknown): value is AnalyticsEngineDataset {
   )
 }
 
+/**
+ * blob2 value: the resolved marketplace for Amazon redirects, the
+ * `ext:<key>` destination for non-Amazon redirects (F15/F16), and empty for
+ * choice-page views (no single destination, F14).
+ */
+function destinationBlob(decision: Exclude<Decision, { type: 'not-found' }>): string {
+  if (decision.type === 'redirect') return decision.marketplace
+  if (decision.type === 'external') return `ext:${decision.destination}`
+  return ''
+}
+
 function logClick(
   dataset: AnalyticsEngineDataset,
   decision: Exclude<Decision, { type: 'not-found' }>,
@@ -170,12 +181,7 @@ function logClick(
       // empty for choice-page views (no single destination, F14). blob4 is
       // `choice` for page views, the resolution reason otherwise. blob6 is
       // the A/B variant (F13) or empty.
-      const marketplace =
-        decision.type === 'redirect'
-          ? decision.marketplace
-          : decision.type === 'external'
-            ? `ext:${decision.destination}`
-            : ''
+      const marketplace = destinationBlob(decision)
       const reason = decision.type === 'choice' ? 'choice' : decision.resolutionReason
       const variant = decision.type === 'redirect' ? (decision.variant ?? '') : ''
       dataset.writeDataPoint({
