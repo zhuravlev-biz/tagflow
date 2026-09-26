@@ -2,9 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist",
-    // See tsconfig.json for why amazon-url.ts needs "DOM" here.
-    "lib": ["ES2022", "DOM"]
+    "outDir": "dist"
   },
   "include": ["src"]
 }

@@ -40,6 +40,11 @@ describe('parseAmazonUrl', () => {
     expect(parseAmazonUrl('https://example.com/dp/B0XXXXXXXX')).toBeNull()
   })
 
+  it('rejects non-http(s) schemes on an Amazon host', () => {
+    expect(parseAmazonUrl('ftp://www.amazon.com/dp/B0XXXXXXXX')).toBeNull()
+    expect(parseAmazonUrl('http://www.amazon.com/dp/B0XXXXXXXX')?.marketplace).toBe('com')
+  })
+
   it('returns null for invalid URL strings without throwing', () => {
     expect(parseAmazonUrl('')).toBeNull()
     expect(parseAmazonUrl('not a url at all')).toBeNull()

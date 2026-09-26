@@ -62,14 +62,16 @@ say. Both are pure and dependency-free (no Node APIs; safe in a browser or
 service worker) and never throw.
 
 ```ts
-import { parseAmazonUrl, withAffiliateTag } from '@tagflow/core'
+import { parseAmazonUrl, parseConfig, withAffiliateTag } from '@tagflow/core'
+
+const parsed = parseConfig(rawConfig) // your tagflow config; check parsed.ok first
 
 parseAmazonUrl('https://www.amazon.de/Some-Widget/dp/B0YYYYYYYY?tag=old-21')
 // { marketplace: 'de', asin: 'B0YYYYYYYY', tag: 'old-21' }
 
 parseAmazonUrl('https://notamazon.de/dp/B0YYYYYYYY') // null — not a real storefront
 
-withAffiliateTag('https://www.amazon.de/dp/B0YYYYYYYY', parsed.config)
+if (parsed.ok) withAffiliateTag('https://www.amazon.de/dp/B0YYYYYYYY', parsed.config)
 // { url: '...?tag=yourtag0d-21', applied: true, reason: 'applied' }
 ```
 

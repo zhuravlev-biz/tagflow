@@ -32,13 +32,7 @@ export interface AffiliateTagResult {
 /** 10-char ASIN, immediately after `/dp/`, `/gp/product/`, or `/gp/aw/d/`. */
 const ASIN_PATH_RE = /\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Za-z0-9]{10})(?![A-Za-z0-9])/
 
-/**
- * Parses `url` (string or already-constructed `URL`) without ever throwing.
- * Returns `null` for anything that is not a syntactically valid absolute
- * URL, and for anything whose host is not a recognised Amazon storefront —
- * this includes lookalike hosts such as `amazon.es.evil.com` or
- * `notamazon.es`, which only a naive "contains amazon" check would miss.
- */
+/** `new URL(url)` that returns `null` instead of throwing on invalid input. */
 function tryParseUrl(url: string | URL): URL | null {
   try {
     return new URL(url)
@@ -84,6 +78,8 @@ function parseAmazonUrlInternal(url: string | URL): ParsedAmazonUrlInternal | nu
   const parsed = tryParseUrl(url)
   if (parsed === null) return null
 
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null
+
   const marketplace = matchMarketplace(parsed.hostname)
   if (marketplace === null) return null
 
@@ -104,9 +100,10 @@ function parseAmazonUrlInternal(url: string | URL): ParsedAmazonUrlInternal | nu
 /**
  * Parses an Amazon product link into its marketplace, ASIN (when the path
  * carries one), and existing affiliate tag (when the `tag` query param is
- * present and non-empty). Never throws — invalid URL strings and anything
- * that isn't a recognised Amazon storefront (including lookalike hosts)
- * simply return `null`.
+ * present and non-empty). Never throws — invalid URL strings, non-http(s)
+ * schemes, and anything that isn't a recognised Amazon storefront return
+ * `null`. Hosts are matched exactly, so lookalikes such as
+ * `amazon.es.evil.com` or `notamazon.es` never match.
  *
  * Pure and read-only: this does not decide whether a tag *should* be
  * applied — see {@link withAffiliateTag} for that, which is meant to run
@@ -129,6 +126,10 @@ export function parseAmazonUrl(url: string | URL): ParsedAmazonUrl | null {
  * an existing tag (there is no option to; Amazon Associates and the Chrome
  * Web Store affiliate-link policy both treat silent retagging as abusive),
  * so the caller always learns why nothing changed via `reason`.
+ *
+ * A missing tag for the URL's marketplace is checked first: such a URL
+ * reports `no-tag-for-marketplace` even if it already carries someone
+ * else's tag. Use {@link parseAmazonUrl} to read that tag if it matters.
  *
  * Every other query param, its position, and the URL's hash are preserved
  * untouched. Non-Amazon input, and Amazon input with no tag configured for

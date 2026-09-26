@@ -89,10 +89,7 @@ Privacy-policy snippet you can adapt:
 `@tagflow/core` ships two pure helpers (`parseAmazonUrl`, `withAffiliateTag`)
 meant for code that meets a raw Amazon URL rather than building one from a
 config — a browser extension acting on whatever page the visitor already
-has open, say. A companion extension template built on top of them lives in
-a separate repository, `zhuravlev-biz/tagflow-extension` (not yet public);
-the constraints below apply to that template and to anything else built on
-these helpers.
+has open, say. The constraints below apply to anything built on these helpers.
 
 - **Click-to-apply only.** Tags may be applied only after an explicit,
   user-initiated action with a clear "why" — a visible button the visitor

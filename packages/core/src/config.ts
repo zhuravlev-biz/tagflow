@@ -168,8 +168,8 @@ function parseDestinationUrl(
     err(path, 'must be a non-empty URL string')
     return undefined
   }
-  // core is platform-free (no `URL` global in its ES2022 lib), so URL sanity
-  // is a scheme check, not a full parse.
+  // Config validation stays a scheme check, not a full URL parse: it runs at
+  // build time on hand-written JSON, where a clear message beats a parser's.
   if (mode === 'web') {
     if (!WEB_URL_RE.test(raw)) {
       err(path, `${JSON.stringify(raw)} is not an absolute http(s) URL`)
